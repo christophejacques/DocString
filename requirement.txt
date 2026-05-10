@@ -1,0 +1,13 @@
+certifi==2024.2.2
+charset-normalizer==3.3.2
+colorama==0.4.6
+idna==3.6
+jedi==0.19.1
+loguru==0.7.2
+parso==0.8.3
+requests==2.31.0
+selectolax==0.3.25
+setuptools==65.5.0
+types-requests==2.33.0.20260508
+urllib3==2.2.0
+win32-setctime==1.1.0
