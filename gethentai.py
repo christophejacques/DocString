@@ -18,12 +18,12 @@ from typing import Optional
 # logger.error
 # logger.critical
 
-SAVE_FILENAME: str = "last_download.txt"
+SAVE_FILENAME: str = "_lastURL.cfg"
 
 # 
 last_directory: str = ""
 url = """
-https://e-hentai.org/s/dabb59f5fe/3096059-1
+https://e-hentai.org/s/ec6f10aeee/3934500-1
 """
 
 
@@ -191,7 +191,7 @@ def main() -> None:
             nombre += 1
 
         if nombre < MAX_TEL:
-            sleep(1)
+            sleep(0.3)
 
             if resultat.parent:
                 next_url = resultat.parent.attributes['href']
