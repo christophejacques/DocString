@@ -23,7 +23,7 @@ SAVE_FILENAME: str = "_lastURL.cfg"
 # 
 last_directory: str = ""
 url = """
-https://e-hentai.org/s/ec6f10aeee/3934500-1
+https://e-hentai.org/s/8e5b222ff1/3936893-1256
 """
 
 
@@ -99,7 +99,7 @@ def title2directory(title: str) -> str:
     recherche = title
     for aSuppr in re.findall(r"\[[^]]*\]", recherche):
         title = title.replace(aSuppr, "")
-
+    title = title.replace("/", " ").replace(">", " ").replace("<", " ")
     return title.replace("|", "-").replace(":", "-").replace("  ", " ").strip().title()
 
 
@@ -139,30 +139,41 @@ def main() -> None:
         url = next_url
 
         # HEADER.update({"Referer": get_referer(url)})
+        retry = 3
+        while retry > 0:
+            response = session.get(url, timeout=5, headers=HEADER)
+            try:
+                response.raise_for_status()
+            except Exception as erreur:
+                logger.error(f"Erreur: {erreur}")
+                return
 
-        response = session.get(url, timeout=5, headers=HEADER)
-        try:
-            response.raise_for_status()
-        except Exception as erreur:
-            logger.error(f"Erreur: {erreur}")
-            return
+            logger.success(f"Scraping {url}")
 
-        logger.success(f"Scraping {url}")
+            tree = HTMLParser(response.text)
+            resultat: Node = tree.css_first("img#img")
+            if not resultat or resultat is None:
+                retry -= 1
+                if retry == 0:
+                    save_last_url(url)
+                    logger.info(f"URL de recherche Sauvegardé: {url}")
 
-        tree = HTMLParser(response.text)
-        resultat: Node = tree.css_first("img#img")
-        if not resultat or resultat is None:
-            logger.error("Aucune image '#img' dans la page d'index")
-            save_last_url(url)
-            logger.info(f"URL de recherche Sauvegardé: {url}")
+                elif retry > 0:
+                    msg = "Aucune image '#img' dans la page d'index"
+                    msg += f", Reste {retry} retry."
+                    logger.error(msg)
+                    sleep(5)
 
+            else:
+                retry = -10
+
+        if retry == 0:
             break
 
-        else:
-            # Suppression du fichier de sauvegarde s'il existe
-            if Path(SAVE_FILENAME).exists():
-                Path(SAVE_FILENAME).unlink()
-                logger.info("Fichier de sauvegarde de l'url de recherche supprimé")
+        # Suppression du fichier de sauvegarde s'il existe
+        if Path(SAVE_FILENAME).exists():
+            Path(SAVE_FILENAME).unlink()
+            logger.info("Fichier de sauvegarde de l'url de recherche supprimé")
 
         title = tree.css_first("title")
         if not title:

@@ -12,6 +12,14 @@ def fprint(*args, **kwargs):
     print(*args, **kwargs, flush=True)
 
 
+class Variable: 
+    SYS_FONT16: pygame.font.Font
+    SYS_FONT18: pygame.font.Font
+    SYS_FONT20: pygame.font.Font
+    SYS_FONT22: pygame.font.Font
+    SYS_FONT24: pygame.font.Font
+
+
 class Factory:
     @classmethod
     def namedtuple(cls, cursor, row):
@@ -127,28 +135,43 @@ class MySQL:
 
         return row
 
-    def select_img(self, ident=None, nom=None):
+    def select_all(self, sql: str, datas: dict):
+
+        self.cu.execute(sql, datas)
+        rows = self.cu.fetchall()
+
+        return rows
+
+    def select_img(self, ident=None, nom=None) -> Optional[Tuple]:
         # 2. Récupération des informations de l'image
+        myBd = sqlite3.connect("test.db")
+        myBd.row_factory = Factory.namedtuple
+        myCursor = myBd.cursor()
+        
         if ident is not None:
-            self.cu.execute("""
+            myCursor.execute("""
                 SELECT emplacement, nom, img 
                 FROM pictures 
                 WHERE ident = :ident""", 
                 {"ident": ident})
 
         elif nom is not None:
-            self.cu.execute("""
+            myCursor.execute("""
                 SELECT emplacement, nom, img 
                 FROM pictures 
                 WHERE nom like :nom""", 
                 {"nom": f"{nom}%"})
 
-        row = self.cu.fetchone()
+        row = myCursor.fetchone()
+        emplacement = row.emplacement
+        nom = row.nom
+
+        myBd.close()
 
         if row is None:
             return None
 
-        return (row.emplacement, row.nom)
+        return (emplacement, nom)
 
 
 def get_pygame_const_name(index):
@@ -233,13 +256,20 @@ class Box(Commande):
 
         self.name = name
         self.color = color
+        self.set_over_color(kwargs.get("over_color", (0, 200, 0)))
 
         self.coords = pygame.Rect(coords)
         self.args = args
         self.callback_ended()
 
         self.callback = kwargs.get("callback")
+        self.params = kwargs.get("params", ())
         self.thread = kwargs.get("thread", False)
+
+        self.lib_surf = Variable.SYS_FONT24.render(f"{self.name}", False, (200, 200, 0))
+
+    def set_over_color(self, color: Tuple[int, int, int]):
+        self.over_color = color
 
     def set_exec_color(self, color: Tuple[int, int, int]):
         self.exec_color = color
@@ -248,7 +278,7 @@ class Box(Commande):
         # fprint(f"Box {self.name!r} Clicked")
         if self.callback and not self.executing_callback:
             self.executing_callback = self.thread
-            self.callback()
+            self.callback(*self.params)
             if self.thread:
                 return
             self.callback_ended()
@@ -265,9 +295,78 @@ class Box(Commande):
             if self.mouse_clicking:
                 pygame.draw.rect(self.screen, (200, 200, 200), self.coords)
             else:
-                pygame.draw.rect(self.screen, self.exec_color, self.coords)
+                pygame.draw.rect(self.screen, self.over_color, self.coords)
         else:
             pygame.draw.rect(self.screen, self.color, self.coords)
+
+        if self.mouse_over:
+            self.screen.blit(self.lib_surf, (200, 10))
+
+
+class Image(Commande):
+
+    def __init__(self, 
+    pattern: str, 
+    color: Tuple[int, int, int], 
+    coords: Tuple[int, int, int, int], 
+    *args, **kwargs):
+        # fprint(f"Image.__init__({pattern})")
+        super().__init__()
+
+        self.image_surface = None
+        self.pattern = pattern
+        self.color = color
+
+        epaisseur: int = 4
+        self.coords = pygame.Rect(coords)
+        self.coords_img = pygame.Rect(
+            (coords[0]+epaisseur, coords[1]+epaisseur + 15, 
+                coords[2]-2*epaisseur, coords[3]-2*epaisseur - 15))
+
+        self.callback = kwargs.get("callback")
+        self.params = kwargs.get("params", ())
+        self.surface = kwargs.get("surface")
+        self.nombre = kwargs.get("nombre", 0)
+        self.directory = kwargs.get("emplacement", "")
+
+        self.nom_surf = Variable.SYS_FONT16.render(f"{self.pattern}", False, (200, 200, 0))
+        self.coords_nom = (
+            self.coords[0] + self.coords[2] - self.nom_surf.get_size()[0]-epaisseur, 
+            self.coords[1]+1)
+
+        self.nb_surf = Variable.SYS_FONT16.render(f"{self.nombre}", False, (200, 200, 0))
+        self.dir_surf = Variable.SYS_FONT24.render(f"{self.directory}", False, (200, 200, 0))
+
+        # self.init_thread(pattern, self.coords_img[2:])
+
+        # Chargement de l'image en tache de fond
+        self.chargement = Thread(target=self.init_thread, args=(pattern, self.coords_img[2:]))
+        self.chargement.start()
+
+    def init_thread(self, pattern: str, size: list[int]):
+        if self.surface:
+            self.image_surface, decalx, decaly = self.surface(pattern, size)
+            self.coords_img[0] += decalx
+            self.coords_img[1] += decaly
+
+    def mouse_click(self):
+        # fprint(f"Image {self.pattern!r} Clicked")
+        if self.callback:
+            self.callback(*self.params, self.pattern)
+
+    def draw(self):
+        if self.mouse_over:
+            pygame.draw.rect(self.screen, (50, self.color[1], 50), self.coords)
+        else:
+            pygame.draw.rect(self.screen, self.color, self.coords)
+
+        if self.image_surface:
+            self.screen.blit(self.image_surface, self.coords_img[:2])
+            self.screen.blit(self.nb_surf, (self.coords[0]+1, self.coords[1]+1))
+            self.screen.blit(self.nom_surf, self.coords_nom)
+
+            if self.mouse_over:
+                self.screen.blit(self.dir_surf, (200, 10))
 
 
 class Fleche(Commande):
@@ -371,6 +470,13 @@ class Main:
 
     def __init__(self):
         pygame.init()
+
+        Variable.SYS_FONT16 = pygame.font.SysFont("arial", 16)
+        Variable.SYS_FONT18 = pygame.font.SysFont("arial", 18)
+        Variable.SYS_FONT20 = pygame.font.SysFont("arial", 20)
+        Variable.SYS_FONT22 = pygame.font.SysFont("arial", 22)
+        Variable.SYS_FONT24 = pygame.font.SysFont("arial", 24)
+
         self.screen = pygame.display.set_mode((1280, 768), pygame.RESIZABLE, 24)
         Commande.SCREEN = self.screen
 
@@ -381,9 +487,21 @@ class Main:
         self.running = True
         self.ecran = 0
 
+        self.offset = 0
+
         self.cmds = Commandes()
         self.load_database()
         self.load_ecran(1)
+
+    def get_fonts(self):
+        liste_polices = pygame.font.get_fonts()
+        # 3. Trier la liste par ordre alphabétique (optionnel, mais plus propre)
+        liste_polices.sort()
+
+        # 4. Afficher les polices
+        print(f"Nombre de polices trouvées : {len(liste_polices)}\n")
+        for police in liste_polices:
+            print(police)
 
     def load_database(self):
         self.msl = MySQL("test.db")
@@ -392,29 +510,68 @@ class Main:
         apres = self.msl.count_table("pictures")
         fprint(apres, "image(s) présente(s)")
 
-    def init_datas(self):
+    def init_datas(self, pattern):
         if self.ecran == 2:
-            self.image_pattern = "3934666-"  # Tsunade
-            self.image_pattern = "3874743-"  # D.E.B.T
-            self.image_pattern = "3882709-"  # High school pleasure Ep.3
+            self.image_pattern = f"{pattern}-"
 
             self.index_min = self.get_min_image_index()
             self.index_max = self.get_max_image_index()
-            fprint(self.index_min, "< index <", self.index_max)
+            # fprint(self.index_min, "< index <", self.index_max)
             self.index = self.index_min
 
-    def load_ecran(self, numero):
+    def get_directories(self, limit):
+        sql = """
+        SELECT distinct emplacement, MIN(nom) nom, COUNT(*) nombre
+        FROM pictures p 
+        GROUP BY emplacement
+        ORDER BY emplacement
+        LIMIT :limit
+        OFFSET :offset
+        """
+
+        rows = self.msl.select_all(sql, {"limit": limit, "offset": self.offset})
+        return rows
+
+    def load_ecran(self, numero, *params):
+        # fprint("load ecran", numero)
         self.ecran = numero
         self.cmds.clear()
 
         if numero == 1:
-            halt = Box("Fermer", (0, 200, 200), (self.screen_width-60, 10, 50, 50), 
+            refresh = Box("Refresh", (0, 200, 200), (10, 10, 50, 50),
+                callback=self.update_database, thread=True)
+            self.cmds.add(refresh)
+
+            halt = Box("Fermer", (200, 20, 20), (self.screen_width-60, 10, 50, 50), 
                 callback=self.stop_running)
             self.cmds.add(halt)
 
+            xmax = (self.screen_width - 20) // 170
+            ymax = (self.screen_height - 20) // 220
+            limit = xmax * ymax
+
+            idy = 0
+            idx = 0
+            for row in self.get_directories(limit):
+                nom = row.nom.split("-")[0]
+                nombre = row.nombre
+                emplacement = row.emplacement
+                img = Image(nom, (0, 50, 50), (20+170*idx, 80+220*idy, 150, 200), 
+                    callback=self.load_ecran, params=(2,),
+                    surface=self.get_image, nombre=nombre,
+                    emplacement=emplacement)
+                self.cmds.add(img)
+
+                # retour a la ligne si plus de place
+                if 20+170*(1+idx) + 150 > self.screen_width - 20:
+                    idx = 0
+                    idy += 1
+                else:
+                    idx += 1
+
         elif numero == 2:
-            refresh = Box("Refresh", (0, 200, 200), (10, 10, 50, 50),
-                callback=self.update_database, thread=True)
+            refresh = Box("Back", (0, 200, 200), (10, 10, 50, 50),
+                callback=self.load_ecran, params=(1,))
             self.cmds.add(refresh)
 
             halt = Box("Fermer", (0, 200, 200), (self.screen_width-60, 10, 50, 50), 
@@ -431,7 +588,7 @@ class Main:
                 callback=self.next_image)
             self.cmds.add(suivante)
 
-            self.init_datas()
+            self.init_datas(*params)
             self.load_image(self.index)
 
     def stop_running(self):
@@ -512,19 +669,18 @@ class Main:
             return
         self.load_image(self.index_max)
 
-    def load_image(self, new_index: int):
-        nom_image = f"{self.image_pattern}{new_index}."
+    def get_image(self, nom_image, size) -> Tuple[Optional[pygame.surface.Surface], int, int]:
         info_image = self.msl.select_img(nom=nom_image)
 
         if info_image is None:
             fprint("Image:", nom_image, "introuvable dans la bdd", flush=True)
-            return None
+            return None, 0, 0
 
         emplacement, nom = info_image
         fichier = Path(emplacement) / nom
         if not fichier.exists():
             fprint("Image:", nom, "introuvable sur le disque", flush=True)
-            return None
+            return None, 0, 0
 
         with open(fichier) as fhandle:
             try:
@@ -534,47 +690,56 @@ class Main:
             except Exception as erreur:
                 fprint("Erreur lors du chargement de l'image:")
                 fprint(erreur)
+                return None, 0, 0
 
         coef: float = 1.0
-        dw = self.screen_width - w
-        dh = self.screen_height - h
+        size_width, size_height = size
 
-        if dw < 0 or dh < 0:
-            if dw > dh:
-                coef = self.screen_height / h
-            else:
-                coef = self.screen_width / w
-        elif dw > dh:
-            coef = self.screen_height / h
-        else:
-            coef = self.screen_width / w
+        if w/h > size_width/size_height and w != 0:
+            coef = size_width / w
+        elif h != 0:
+            coef = size_height / h
 
         if coef != 1.0:
             width = int(w * coef)
             height = int(h * coef)
             new_image = pygame.transform.scale(new_image, (width, height))
             
-            self.image_posx = (self.screen_width - width) // 2
-            self.image_posy = (self.screen_height - height) // 2
+            image_posx = (size_width - width) // 2
+            image_posy = (size_height - height) // 2
 
         else:
-            self.image_posx = 0
-            self.image_posy = 0
+            image_posx = 0
+            image_posy = 0
 
+        return new_image, image_posx, image_posy
+
+    def load_image(self, new_index: int):
+        nom_image = f"{self.image_pattern}{new_index}."
+
+        new_image, self.image_posx, self.image_posy = self.get_image(
+            nom_image, (self.screen_width, self.screen_height))
         # new_image.set_alpha(255)
-        self.screen.fill((30, 20, 30))
+
+        if new_image is None:
+            return
 
         self.index = new_index
         self.image_surface = new_image
         self.check_fleches()
 
     def resize(self):
-        # fprint("resize", self.screen.get_size())
+        fprint("resize", self.screen.get_size())
         self.screen_width, self.screen_height = self.screen.get_size()
-        self.cmds.get("Gauche").set_pos(30, self.screen_height // 2 - 40)
-        self.cmds.get("Droite").set_pos(self.screen_width - 110, self.screen_height // 2 - 40)
-        self.cmds.get("Fermer").set_pos(self.screen_width - 60, 10)
-        self.load_image(self.index)
+
+        if self.ecran == 1:
+            self.load_ecran(1)
+
+        elif self.ecran == 2:
+            self.cmds.get("Gauche").set_pos(30, self.screen_height // 2 - 40)
+            self.cmds.get("Droite").set_pos(self.screen_width - 110, self.screen_height // 2 - 40)
+            self.cmds.get("Fermer").set_pos(self.screen_width - 60, 10)
+            self.load_image(self.index)
 
     def gestion_fin_threads(self):
         if self.updating is None:
@@ -596,6 +761,9 @@ class Main:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
+
+            elif event.type == pygame.WINDOWRESIZED:
+                self.resize()
 
             elif event.type == pygame.KEYUP:
                 if event.key == pygame.K_ESCAPE:
@@ -624,7 +792,8 @@ class Main:
 
             elif event.type == pygame.KEYUP:
                 if event.key == pygame.K_ESCAPE:
-                    self.running = False
+                    # self.running = False
+                    self.load_ecran(1)
 
                 elif event.key in (pygame.K_UP, pygame.K_HOME):
                     self.first_image()
