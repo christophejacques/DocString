@@ -23,7 +23,7 @@ SAVE_FILENAME: str = "_lastURL.cfg"
 # 
 last_directory: str = ""
 url = """
-https://e-hentai.org/s/8e5b222ff1/3936893-1256
+https://e-hentai.org/s/64ac9cf976/3337122-1
 """
 
 
