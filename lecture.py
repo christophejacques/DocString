@@ -1,5 +1,6 @@
 import sqlite3
 import pygame
+import re
 
 from pathlib import Path
 from typing import Optional, Tuple, Callable
@@ -49,13 +50,17 @@ class Factory:
         return {key: value for key, value in zip(fields, row)}
 
 
+# Fonction pour diviser le texte en morceaux de chaînes et de nombres
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+
 class MySQL:
 
     def __init__(self, dbname: str):
         # dbname = ":memory:"
         self.cx = sqlite3.connect(dbname)
         self.cx.row_factory = Factory.namedtuple
-
         self.cu = self.cx.cursor()
 
         # reconstruction du fichier de bdd
@@ -69,7 +74,8 @@ class MySQL:
       tablename: str, 
       distinct: Optional[str] = None, 
       where: Optional[str] = None, 
-      group_by: Optional[str] = None) -> int:
+      group_by: Optional[str] = None,
+      data: dict = dict()) -> int:
 
         if distinct:
             sql = f"SELECT count(distinct {distinct}) as nombre FROM " + tablename
@@ -82,11 +88,23 @@ class MySQL:
         if group_by is not None:
             sql += " GROUP BY " + group_by
 
-        requete = self.cu.execute(sql)
+        requete = self.cu.execute(sql, data)
         result = requete.fetchone()
         
         return result.nombre
         # return result[0]
+
+    def delete_table(self, 
+      tablename: str, 
+      where: Optional[str] = None, 
+      data: dict = dict()):
+
+        sql = f"DELETE FROM {tablename}" 
+        if where is not None:
+            sql += " WHERE " + where
+
+        self.cu.execute(sql, data)
+        self.cx.commit()
 
     def create_table(self, drop_if_exists: bool = False):
 
@@ -125,51 +143,82 @@ class MySQL:
         def walk_key_sort(e): 
             return e[0]
 
+        # Fonction pour diviser le texte en morceaux de chaînes et de nombres
+        def natural_sort_key(s):
+            if s is None: 
+                return []
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+        fprint("Updating Database:", end=" ... ")
         nombre: int = 0
         rep_init = Path(Variable.SUB_DIRECTORY)
+        extensions = ("jpg", "bmp", "webp", "gif", "jpeg", "png", "tiff")
 
-        fprint("Updating Database: ...")
         myBd = sqlite3.connect(Variable.DATABASE_NAME)
         myCursor = myBd.cursor()
+        need_commit: bool = False
 
-        nb_files1 = 0
+        for windowsDirectory, _, fichiers in sorted(rep_init.walk(), key=walk_key_sort):
+            
+            root = f"{windowsDirectory}"
+            files = sorted(list(
+                filter(
+                    lambda x: x.split(".")[-1].lower() in extensions, fichiers)),
+                key=natural_sort_key)
 
-        for entrees in sorted(rep_init.walk(), key=walk_key_sort):
-            root, dirs, files = entrees
-            nb_files1 += len(files)
+            nombre = len(files)
 
-            for fichier in sorted(files):
-                if fichier.split(".")[-1].lower() not in ("jpg", 
-                "bmp", "webp", "gif", "jpeg", "png", "tiff"):
-                    # ce n'est pas une image
-                    print("Bad extension:", root, fichier)
-                    continue
+            # Détection du nombre de fichier(s) manquant(s)
+            placeholders = ", ".join(["?"] * nombre)
+            myCursor.execute("""
+                SELECT count(1)
+                FROM pictures  
+                WHERE emplacement = ?
+                  AND nom in (""" + placeholders + ")", 
+                (root, *files))
 
-                # if self.file_exists(fichier):
-                if self.file_exists(f"{root}", fichier, myCursor):
-                    # Fichier déjà présent.
-                    # print("File exists:", root, fichier)
-                    continue
+            liste = myCursor.fetchone()
+            if liste[0] != nombre:
+                need_commit = True
+                fprint("\nChecking:", root)
+                fprint("-", len(files), end=" fichier(s) dont ")
+                fprint(nombre - liste[0], "fichier(s) manquant(s)")
 
-                nombre += 1
-                sql = """INSERT INTO pictures (emplacement, nom, img) 
-                         VALUES (:emplacement, :nom, :data) """
-                myCursor.execute(sql, 
-                    {"emplacement": f"{root}", "nom": fichier, "data": None})
+                #  Suppression de toutes les image(s) du répertoire
+                resultat = myCursor.execute("""
+                    DELETE FROM pictures  
+                    WHERE emplacement = :emplacement
+                    """, 
+                    {"emplacement": root})
 
-        myBd.commit()
+                fprint("-", f"{resultat.rowcount} images supprimées")
+
+                # Ajout de toutes les images
+                liste_images = [{"emplacement": root, "nom": img} for img in files]
+                resultat = myCursor.executemany("""
+                    INSERT INTO pictures (emplacement, nom)
+                    VALUES (:emplacement, :nom)
+                    """, 
+                    liste_images)
+
+                fprint("-", f"{resultat.rowcount} images ajoutées", end="")
+
+        if need_commit:
+            fprint("\n+", "commit()", end=" ... ")
+            myBd.commit()
+
+        fprint("done")
         myBd.close()
-        fprint(nombre, "fichier(s) ajouté(s) sur", nb_files1, "trouvé(s)")
 
     def read_files(self):
         sql = "SELECT ident, nom FROM pictures"
         requete = self.cu.execute(sql)
 
         result = requete.fetchall()
-        for index, fichier in enumerate(result):
+        for ident, fichier in enumerate(result):
             numero, nom = fichier
             print(f"{numero:5} {nom[:28]:28}", end="-")
-            if index % 4 == 3:
+            if ident % 4 == 3:
                 print(flush=True)
 
         print(flush=True)
@@ -220,16 +269,16 @@ class MySQL:
         return (emplacement, nom)
 
 
-def get_pygame_const_name(index):
+def get_pygame_const_name(ident):
     for c in dir(pygame):
         if callable(c):
             continue
 
         if c[0] in "AZERTYUIOPMLKJHGFDSQWXCVBN":
-            if type(getattr(pygame, c)) is int and getattr(pygame, c) == index:
+            if type(getattr(pygame, c)) is int and getattr(pygame, c) == ident:
                 return c
 
-    return index
+    return ident
 
 
 class Commande:
@@ -580,6 +629,9 @@ class Main:
         self.ident_max = 1
         self.ident = self.ident_min
 
+        self.index = 0
+        self.nb_images = 0
+
         self.offset = 0
         self.offset_max = 0
         self.limit = 0
@@ -608,14 +660,33 @@ class Main:
 
     def init_datas(self, emplacement):
         if self.ecran == 1:
-            pass
+            pygame.display.set_caption("Liste des répertoires")
+
+            xmax = (self.screen_width - 20) // 170
+            ymax = (self.screen_height - 70) // 220
+            self.limit = xmax * ymax
+            if self.nb_collections <= self.limit:
+                self.offset_max = 0
+            else:
+                self.offset_max = ((self.nb_collections-1) // self.limit) * self.limit
 
         elif self.ecran == 2:
             self.emplacement = f"{emplacement}"
+            pygame.display.set_caption(self.emplacement)
+
+            # Footer
+            taille = (self.screen_width, 40)
+            self.footer_position = (0, self.screen_height-taille[1])
+            self.footer = pygame.Surface(taille, pygame.SRCALPHA)
+
+            self.index = 1
+            self.nb_images = self.msl.count_table("pictures", 
+                where="emplacement = :emplacement", data={
+                    "emplacement": emplacement
+                })
 
             self.ident_min = self.get_min_image_ident()
             self.ident_max = self.get_max_image_ident()
-            # fprint(self.ident_min, "< ident <", self.ident_max)
             self.ident = self.ident_min
 
     def get_directories(self):
@@ -725,13 +796,14 @@ class Main:
         self.cmds.clear()
 
         if numero == 1:
-            refresh = Box("Refresh", (0, 200, 200), (10, 10, 50, 50),
-                callback=self.update_database, thread=True)
-            self.cmds.add(refresh)
-
-            halt = Box("Fermer", (200, 20, 20), (self.screen_width-60, 10, 50, 50), 
+            halt = Box("Fermer", (0, 200, 200), (10, 10, 50, 50), 
                 callback=self.stop_running)
             self.cmds.add(halt)
+
+            # liste des directories
+            refresh = Box("Refresh", (200, 20, 20), (self.screen_width-60, 10, 50, 50),
+                callback=self.update_database, thread=True)
+            self.cmds.add(refresh)
 
             precedente = Fleche("Gauche", (0, 200, 200), (
                 80, 10, 50, 50), "LEFT",
@@ -746,14 +818,7 @@ class Main:
                 callback=self.next_directory)
             self.cmds.add(suivante)
 
-            xmax = (self.screen_width - 20) // 170
-            ymax = (self.screen_height - 70) // 220
-            self.limit = xmax * ymax
-            if self.nb_collections <= self.limit:
-                self.offset_max = 0
-            else:
-                self.offset_max = ((self.nb_collections-1) // self.limit) * self.limit
-
+            self.init_datas("")
             self.load_directories()
 
             if self.offset + self.limit >= self.nb_collections:
@@ -763,6 +828,7 @@ class Main:
             self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
 
         elif numero == 2:
+            # Image du repertoire selectionne
             refresh = Box("Back", (0, 200, 200), (10, 10, 50, 50),
                 callback=self.load_ecran, params=(1,))
             self.cmds.add(refresh)
@@ -780,11 +846,6 @@ class Main:
                 self.screen_width - 110, self.screen_height // 2 - 40, 80, 80), "RIGHT",
                 callback=self.next_image)
             self.cmds.add(suivante)
-
-            # Footer
-            taille = (self.screen_width, 40)
-            self.footer_position = (0, self.screen_height-taille[1])
-            self.footer = pygame.Surface(taille, pygame.SRCALPHA)
 
             self.init_datas(*params)
             self.load_image(self.ident)
@@ -812,12 +873,9 @@ class Main:
             sql = """
             SELECT nom, ident
             FROM pictures  
-            WHERE nom like :filename
-                AND LENGTH(nom) = (
-                SELECT MIN(LENGTH(nom))
-                FROM pictures
-                WHERE nom like :filename) 
-            ORDER BY nom
+            WHERE emplacement = :emplacement
+            ORDER BY ident
+            LIMIT 1
             """
 
         row = self.msl.select_one(sql, {
@@ -825,7 +883,7 @@ class Main:
             "emplacement": self.emplacement
             })
 
-        # index_min = int(row.nom.split(".")[0].split("-")[1])
+        # ident_min = int(row.nom.split(".")[0].split("-")[1])
         ident_min = row.ident
 
         return ident_min
@@ -906,21 +964,29 @@ class Main:
     def first_image(self):
         if self.ident <= self.ident_min:
             return
+
+        self.index = 1
         self.load_image(self.ident_min)
 
     def previous_image(self):
         if self.ident <= self.ident_min:
             return
+
+        self.index -= 1
         self.load_image(self.get_previous_image_ident())
 
     def next_image(self):
         if self.ident >= self.ident_max:
             return
+
+        self.index += 1
         self.load_image(self.get_next_image_ident())
 
     def last_image(self):
         if self.ident >= self.ident_max:
             return
+
+        self.index = self.nb_images
         self.load_image(self.ident_max)
 
     def get_image(self, ident_image: int, size) -> Tuple[Optional[pygame.surface.Surface], int, int]:
@@ -969,6 +1035,11 @@ class Main:
 
         self.nom_surface = Variable.SYS_FONT24.render(f"{nom}", False, (200, 200, 0))
 
+        compteur = f"{self.index:^5_} / {self.nb_images:^5_}".replace("_", " ")
+        self.compteur_surf = Variable.SYS_FONT24.render(f"{compteur}", False, (200, 200, 0))
+        tx, ty = self.compteur_surf.get_size()
+        self.compteur_position = size_width - 10 - tx, 4
+
         return new_image, image_posx, image_posy
 
     def load_image(self, new_ident: int):
@@ -1002,6 +1073,18 @@ class Main:
             self.footer_position = (0, self.screen_height-taille[1])
             self.footer = pygame.Surface(taille, pygame.SRCALPHA)
 
+    def mouse_move(self, event):
+        self.cmds.mouse_move(event.pos)
+        self.mouse_pos_x, self.mouse_pos_y = event.pos
+
+    def mouse_button_up(self, event):
+        if event.button == 1:
+            self.cmds.mouse_up()
+
+    def mouse_button_down(self, event):
+        if event.button == 1:
+            self.cmds.mouse_down()
+
     def gestion_fin_threads(self):
         if self.updating is None:
             return
@@ -1014,91 +1097,93 @@ class Main:
                 refresh.callback_ended()
 
     def get_pygame_events(self):
-        if self.ecran == 1:
-            self.get_pygame_events_1()
+        pygame_events: dict = {
+            1: self.get_directory_events,
+            2: self.get_pictures_events
+        }
+        pygame_events.get(self.ecran)()
 
-        elif self.ecran == 2:
-            self.get_pygame_events_2()
+    def get_directory_events(self):
+        key_function: dict = {
+            pygame.K_ESCAPE: (self.stop_running,),
+            pygame.K_F5: (self.load_ecran, 1),
+            pygame.K_UP: (self.first_directory,),
+            pygame.K_HOME: (self.first_directory,),
+            pygame.K_DOWN: (self.last_directory, ),
+            pygame.K_END: (self.last_directory,),
+            pygame.K_LEFT: (self.previous_directory,),
+            pygame.K_RIGHT: (self.next_directory,),
+        }
 
-    def get_pygame_events_1(self):
+        type_event: dict = {
+            pygame.QUIT: (self.stop_running,),
+            pygame.WINDOWRESIZED: (self.resize,),
+            pygame.KMOD_LGUI: (self.mouse_move, "EVENT"),
+            pygame.MOUSEBUTTONUP: (self.mouse_button_up, "EVENT"),
+            pygame.MOUSEBUTTONDOWN: (self.mouse_button_down, "EVENT"),
+        }
+
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
 
-            elif event.type == pygame.WINDOWRESIZED:
-                self.resize()
+            result = type_event.get(event.type)
+            if result:
+                fonction, *params = result
+                if fonction:
+                    if params and params[0] == "EVENT":
+                        fonction(event)
+                    else:
+                        fonction()
 
             elif event.type == pygame.KEYUP:
-                if event.key == pygame.K_ESCAPE:
-                    self.running = False
+                results = key_function.get(event.key)
+                if results:
+                    fonction, *params = results
+                    if fonction is not None:
+                        fonction(*params)
 
-                elif event.key in (pygame.K_UP, pygame.K_HOME):
-                    self.first_directory()
+    def get_pictures_events(self):
+        key_function: dict = {
+            pygame.K_ESCAPE: (self.load_ecran, 1),
+            pygame.K_UP: (self.first_image,),
+            pygame.K_HOME: (self.first_image,),
+            pygame.K_DOWN: (self.last_image, ),
+            pygame.K_END: (self.last_image,),
+            pygame.K_LEFT: (self.previous_image,),
+            pygame.K_RIGHT: (self.next_image,),
+        }
 
-                elif event.key in (pygame.K_DOWN, pygame.K_END):
-                    self.last_directory()
+        type_event: dict = {
+            pygame.QUIT: (self.stop_running,),
+            pygame.WINDOWRESIZED: (self.resize,),
+            pygame.KMOD_LGUI: (self.mouse_move, "EVENT"),
+            pygame.MOUSEBUTTONUP: (self.mouse_button_up, "EVENT"),
+            pygame.MOUSEBUTTONDOWN: (self.mouse_button_down, "EVENT"),
+        }
 
-                elif event.key == pygame.K_LEFT:
-                    self.previous_directory()
-
-                elif event.key == pygame.K_RIGHT:
-                    self.next_directory()
-
-            elif event.type == pygame.KMOD_LGUI:
-                self.cmds.mouse_move(event.pos)
-                self.mouse_pos_x, self.mouse_pos_y = event.pos
-
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self.cmds.mouse_down()
-
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                self.cmds.mouse_up()
-
-    def get_pygame_events_2(self):
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
 
-            elif event.type == pygame.WINDOWRESIZED:
-                self.resize()
-
-            elif event.type == pygame.KEYDOWN:
-                pass
+            result = type_event.get(event.type)
+            if result:
+                fonction, *params = result
+                if fonction:
+                    if params and params[0] == "EVENT":
+                        fonction(event)
+                    else:
+                        fonction()
 
             elif event.type == pygame.KEYUP:
-                if event.key == pygame.K_ESCAPE:
-                    # self.running = False
-                    self.load_ecran(1)
-
-                elif event.key in (pygame.K_UP, pygame.K_HOME):
-                    self.first_image()
-
-                elif event.key in (pygame.K_DOWN, pygame.K_END):
-                    self.last_image()
-
-                elif event.key == pygame.K_LEFT:
-                    self.previous_image()
-
-                elif event.key == pygame.K_RIGHT:
-                    self.next_image()
+                results = key_function.get(event.key)
+                if results:
+                    fonction, *params = results
+                    if fonction is not None:
+                        fonction(*params)
 
                 else:
                     fprint(get_pygame_const_name(event.type), 
                         get_pygame_const_name(event.key))
 
-            elif event.type == pygame.KMOD_LGUI:
-                self.cmds.mouse_move(event.pos)
-                self.mouse_pos_x, self.mouse_pos_y = event.pos
-
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self.cmds.mouse_down()
-
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                self.cmds.mouse_up()
-
-            else:
-                pass
-                # fprint(get_pygame_const_name(event.type))
+            # else:
+            #     fprint(get_pygame_const_name(event.type))
 
     def draw(self):
         self.screen.fill((50, 20, 50))
@@ -1108,6 +1193,7 @@ class Main:
 
             self.footer.fill((10, 10, 10, 128))
             self.footer.blit(self.nom_surface, (10, 4))
+            self.footer.blit(self.compteur_surf, self.compteur_position)
             self.screen.blit(self.footer, self.footer_position)
         
         self.cmds.draw()

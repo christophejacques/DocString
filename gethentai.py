@@ -23,7 +23,7 @@ SAVE_FILENAME: str = "_lastURL.cfg"
 # 
 last_directory: str = ""
 url = """
-https://e-hentai.org/s/64ac9cf976/3337122-1
+https://e-hentai.org/s/674992d15a/2464448-1
 """
 
 
@@ -108,8 +108,12 @@ def download(session: requests.Session, directory: str, nom_fichier: str, url: O
     if url is None:
         return
 
-    response = session.get(url)
-    response.raise_for_status()
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+    except Exception as erreur:
+        logger.critical("ERREUR:", erreur)
+        raise
 
     type_fichier, extension = response.headers.get("Content-Type", "").split("/")
     if type_fichier != "image":
