@@ -23,7 +23,7 @@ SAVE_FILENAME: str = "_lastURL.cfg"
 # 
 last_directory: str = ""
 url = """
-https://e-hentai.org/s/674992d15a/2464448-1
+https://e-hentai.org/s/1cf2dad5c8/3339274-1
 """
 
 
@@ -138,8 +138,12 @@ def main() -> None:
     next_url: str = BASE_URL
     url: str = ""
     nombre: int = 0
+    current: str = ""
+    total: str = ""
 
-    while next_url != url:
+    file_already_downloaded: bool = False
+
+    while next_url != url and not file_already_downloaded:
         url = next_url
 
         # HEADER.update({"Referer": get_referer(url)})
@@ -152,7 +156,11 @@ def main() -> None:
                 logger.error(f"Erreur: {erreur}")
                 return
 
-            logger.success(f"Scraping {url}")
+            msg = f"Scraping {url}"
+            if total != "" and current.isdigit():
+                msg += f" ({1+int(current)} / {total})"
+
+            logger.success(msg)
 
             tree = HTMLParser(response.text)
             resultat: Node = tree.css_first("img#img")
@@ -184,6 +192,15 @@ def main() -> None:
             logger.error("Aucun titre trouve sur la page")
             break
 
+        current_number: Node = tree.css_first("div.sn:nth-child(1) > div:nth-child(3) > span:nth-child(1)")
+        if current_number is not None:
+            nombre_total: Node = tree.css_first("div.sn:nth-child(1) > div:nth-child(3) > span:nth-child(2)")
+            if nombre_total is not None:
+                current = current_number.text()
+                total = nombre_total.text()
+        else:
+            total = ""
+
         directory = Path("img") / title2directory(title.text())
         if not directory.exists():
             rep = f"{directory}".encode().decode()
@@ -199,6 +216,7 @@ def main() -> None:
             # un fichier a été trouvé
             for fichier in fichiers_trouves:
                 logger.info(f"Fichier déjà téléchargé: {fichier.name}")
+                file_already_downloaded = True
                 break
 
         else:

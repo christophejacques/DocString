@@ -20,11 +20,11 @@ class Variable:
     # DIRECTORY: str = r"E:\Jeux\World of Warcraft\_retail_\Screenshots"
     # SUB_DIRECTORY: str = "."
 
-    # DIRECTORY: str = r""
-    # SUB_DIRECTORY: str = "img"
+    DIRECTORY: str = r""
+    SUB_DIRECTORY: str = "img"
 
-    DIRECTORY: str = r"F:\Images\Hentai"
-    SUB_DIRECTORY: str = "."
+    # DIRECTORY: str = r"F:\Images\Hentai"
+    # SUB_DIRECTORY: str = "."
 
     SYS_FONT16: pygame.font.Font
     SYS_FONT18: pygame.font.Font
@@ -114,8 +114,15 @@ class MySQL:
         self.cu.execute("""CREATE TABLE IF NOT EXISTS pictures(
             ident integer PRIMARY KEY AUTOINCREMENT,
             emplacement text,
-            nom text,
-            img blob
+            nom text
+        )""")
+
+        if drop_if_exists:
+            self.cu.execute("DROP TABLE IF EXISTS last_picture")
+
+        self.cu.execute("""CREATE TABLE IF NOT EXISTS last_picture(
+            emplacement text,
+            fichier text
         )""")
 
     def file_exists(self, emplacement: str, nom: str, cursor) -> bool:
@@ -147,7 +154,8 @@ class MySQL:
         def natural_sort_key(s):
             if s is None: 
                 return []
-            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+            return [int(text) if text.isdigit() else text.lower() 
+                for text in re.split(r'(\d+)', s)]
 
         fprint("Updating Database:", end=" ... ")
         nombre: int = 0
@@ -210,6 +218,52 @@ class MySQL:
         fprint("done")
         myBd.close()
 
+    def insert_or_update(self, table: str, insert_data: dict, update_data: dict,
+            where_data: dict = dict()):
+
+        where = ','.join(map(lambda champ: f"{champ} = :{champ}", where_data.keys()))
+
+        result = self.count_table(table, where=where, data=where_data)
+        # fprint("count", table, ":", result)
+
+        if result == 0:
+            self.insert(table, insert_data)
+        else:
+            self.update(table, update_data=update_data, where_data=where_data)
+
+    def update(self, table: str, update_data: dict, where_data: dict = dict()):
+    
+        sql = f"UPDATE {table} "
+        sql += "SET "
+        sql += ','.join(map(lambda champ: f"{champ} = :{champ}", update_data.keys()))
+
+        if where_data:
+            sql += " WHERE "
+            sql += ','.join(map(lambda champ: f"{champ} = :{champ}", where_data.keys()))
+
+        datas = update_data.copy()
+        datas.update(where_data)
+        # fprint(sql, datas)
+
+        result = self.cu.execute(sql, datas)
+        self.cx.commit()
+
+    def insert(self, table: str, datas: dict):
+
+        liste_valeurs = datas.keys()
+        
+        sql = f"INSERT INTO {table} "
+        sql += f" ({','.join(liste_valeurs)}) "
+        sql += "VALUES ("
+        sql += ','.join(map(lambda champ: f":{champ}", liste_valeurs))
+        sql += ")"
+
+        # fprint(sql)
+        result = self.cu.execute(sql, datas)
+
+        # fprint("Resultat insert:", result)
+        self.cx.commit()
+
     def read_files(self):
         sql = "SELECT ident, nom FROM pictures"
         requete = self.cu.execute(sql)
@@ -245,14 +299,14 @@ class MySQL:
         
         if ident is not None:
             myCursor.execute("""
-                SELECT emplacement, nom, img 
+                SELECT emplacement, nom
                 FROM pictures 
                 WHERE ident = :ident""", 
                 {"ident": ident})
 
         elif nom is not None:
             myCursor.execute("""
-                SELECT emplacement, nom, img 
+                SELECT emplacement, nom
                 FROM pictures 
                 WHERE nom like :nom""", 
                 {"nom": f"{nom}%"})
@@ -440,11 +494,19 @@ class Image(Commande):
             taille = (coords[2], 20)
 
         self.header_position = coords[:2]
-        self.header = pygame.Surface(taille, pygame.SRCALPHA)
-        
-        self.nb_surf = Variable.SYS_FONT20.render(f"{self.nombre}", False, (200, 200, 0))
-        self.coords_nombre = (coords[0]+epaisseur, coords[1]+coords[3]-epaisseur-20)
+        self.footer_position = (coords[0], coords[1]+coords[3]-20-epaisseur)
 
+        self.header = pygame.Surface(taille, pygame.SRCALPHA)
+        self.footer = pygame.Surface((coords[2], 20+epaisseur), pygame.SRCALPHA)
+
+        self.header.fill((10, 10, 10, 128))
+        self.footer.fill((10, 10, 10, 192))
+
+        self.nb_surf = Variable.SYS_FONT20.render(f"{self.nombre}", False, (200, 200, 0))
+
+        self.header.blit(self.nom_surf1, (epaisseur, 1))
+        self.footer.blit(self.nb_surf, (epaisseur, 1))
+        
         self.dir_surf = Variable.SYS_FONT24.render(f"{self.directory}", False, (200, 200, 0))
 
         # Chargement de l'image en temps reel
@@ -473,12 +535,10 @@ class Image(Commande):
         else:
             pygame.draw.rect(self.screen, self.color, self.coords)
 
-        self.header.fill((10, 10, 10, 128))
         self.screen.blit(self.header, self.header_position)
 
         if self.image_surface:
             self.screen.blit(self.image_surface, self.coords_img[:2])
-            self.screen.blit(self.nom_surf1, self.coords_nom1)
 
             if self.nom_surf2:
                 self.screen.blit(self.nom_surf2, self.coords_nom2)
@@ -486,7 +546,7 @@ class Image(Commande):
             if self.mouse_over:
                 self.screen.blit(self.dir_surf, (200, 10))
 
-        self.screen.blit(self.nb_surf, self.coords_nombre)
+        self.screen.blit(self.footer, self.footer_position)
 
 
 class Fleche(Commande):
@@ -658,7 +718,7 @@ class Main:
         self.nb_collections = self.msl.count_table("pictures", distinct="emplacement")
         fprint(apres, "image(s) présente(s) dans", self.nb_collections, "collections")
 
-    def init_datas(self, emplacement):
+    def init_datas(self, emplacement: str = ""):
         if self.ecran == 1:
             pygame.display.set_caption("Liste des répertoires")
 
@@ -679,7 +739,6 @@ class Main:
             self.footer_position = (0, self.screen_height-taille[1])
             self.footer = pygame.Surface(taille, pygame.SRCALPHA)
 
-            self.index = 1
             self.nb_images = self.msl.count_table("pictures", 
                 where="emplacement = :emplacement", data={
                     "emplacement": emplacement
@@ -687,7 +746,19 @@ class Main:
 
             self.ident_min = self.get_min_image_ident()
             self.ident_max = self.get_max_image_ident()
-            self.ident = self.ident_min
+
+            ident = self.get_last_saved_image()
+            if ident is None:
+                self.index = 1
+                self.ident = self.ident_min
+            else:
+                self.ident = int(ident)
+                self.index = self.msl.count_table("pictures", 
+                    where="emplacement = :emplacement and ident <= :ident", 
+                    data={
+                        "emplacement": emplacement,
+                        "ident": self.ident
+                    })
 
     def get_directories(self):
         sql = """
@@ -746,6 +817,9 @@ class Main:
         if droite.hidden and self.offset < self.offset_max:
             droite.set_visible(True)
 
+        # simulation du mouvement de la souris
+        self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+
     def previous_directory(self):
         if self.offset == 0:
             return
@@ -763,6 +837,9 @@ class Main:
         if droite.hidden and self.offset < self.offset_max:
             droite.set_visible(True)
 
+        # simulation du mouvement de la souris
+        self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+
     def next_directory(self):
         if self.offset + self.limit >= self.nb_collections:
             return 
@@ -775,6 +852,9 @@ class Main:
         self.load_directories()
 
         self.cmds.get("Droite").set_visible(self.offset < self.offset_max)
+
+        # simulation du mouvement de la souris
+        self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
 
     def last_directory(self):
         if self.offset + self.limit >= self.nb_collections:
@@ -790,13 +870,20 @@ class Main:
 
         self.cmds.get("Droite").set_visible(False)
 
+        # simulation du mouvement de la souris
+        self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+
     def load_ecran(self, numero, *params):
         # fprint("load ecran", numero, params)
         self.ecran = numero
         self.cmds.clear()
 
         if numero == 1:
-            halt = Box("Fermer", (0, 200, 200), (10, 10, 50, 50), 
+            if len(params) > 0 and params[0] == "BACK":
+                # sauvegarde de la dernière image consultée
+                self.save_last_image()
+
+            halt = Box("Quitter", (0, 200, 200), (10, 10, 50, 50), 
                 callback=self.stop_running)
             self.cmds.add(halt)
 
@@ -818,7 +905,7 @@ class Main:
                 callback=self.next_directory)
             self.cmds.add(suivante)
 
-            self.init_datas("")
+            self.init_datas()
             self.load_directories()
 
             if self.offset + self.limit >= self.nb_collections:
@@ -830,10 +917,10 @@ class Main:
         elif numero == 2:
             # Image du repertoire selectionne
             refresh = Box("Back", (0, 200, 200), (10, 10, 50, 50),
-                callback=self.load_ecran, params=(1,))
+                callback=self.load_ecran, params=(1, "BACK"))
             self.cmds.add(refresh)
 
-            halt = Box("Fermer", (0, 200, 200), (self.screen_width-60, 10, 50, 50), 
+            halt = Box("Quitter", (0, 200, 200), (self.screen_width-60, 10, 50, 50), 
                 callback=self.stop_running)
             self.cmds.add(halt)
 
@@ -859,93 +946,74 @@ class Main:
             self.updating = Thread(target=self.msl.add_file)
             self.updating.start()
 
-    def get_min_image_ident(self, by_emplacement: bool = True) -> int:
-        # fprint(f"get_min_image_ident({self.emplacement})")
+    def get_min_image_ident(self) -> int:
 
-        if by_emplacement:
-            sql = """
-            SELECT MIN(ident) ident
-            FROM pictures  
-            WHERE emplacement = :emplacement
-            """
-
-        else:
-            sql = """
-            SELECT nom, ident
-            FROM pictures  
-            WHERE emplacement = :emplacement
-            ORDER BY ident
-            LIMIT 1
-            """
-
-        row = self.msl.select_one(sql, {
-            "filename": "%-%",
-            "emplacement": self.emplacement
-            })
-
-        # ident_min = int(row.nom.split(".")[0].split("-")[1])
-        ident_min = row.ident
-
-        return ident_min
-
-    def get_next_image_ident(self) -> int:
         sql = """
         SELECT MIN(ident) ident
         FROM pictures  
         WHERE emplacement = :emplacement
+        """
+
+        row = self.msl.select_one(sql, {
+            "emplacement": self.emplacement
+            })
+
+        ident_min = row.ident
+
+        return ident_min
+
+    def get_next_image_ident(self, nombre: int = 1) -> int:
+        sql = """
+        SELECT ident
+        FROM pictures  
+        WHERE emplacement = :emplacement
           AND ident > :ident
+        ORDER BY ident
+        LIMIT 1
+        OFFSET :nombre
+        """
+        datas: dict = {
+            "ident": self.ident,
+            "emplacement": self.emplacement,
+            "nombre": nombre-1
+            }
+
+        row = self.msl.select_one(sql, datas)
+        
+        return row.ident
+
+    def get_previous_image_ident(self, nombre: int = 1) -> int:
+        sql = """
+        SELECT ident
+        FROM pictures  
+        WHERE emplacement = :emplacement
+          AND ident < :ident
+        ORDER BY ident DESC
+        LIMIT 1
+        OFFSET :nombre
         """
 
         row = self.msl.select_one(sql, {
             "ident": self.ident,
-            "emplacement": self.emplacement
+            "emplacement": self.emplacement,
+            "nombre": nombre-1
             })
 
         return row.ident
 
-    def get_previous_image_ident(self) -> int:
+    def get_max_image_ident(self) -> int:
+
         sql = """
         SELECT MAX(ident) ident
         FROM pictures  
         WHERE emplacement = :emplacement
-          AND ident < :ident
         """
 
         row = self.msl.select_one(sql, {
-            "ident": self.ident,
             "emplacement": self.emplacement
             })
 
         return row.ident
-
-    def get_max_image_ident(self, by_emplacement: bool = True) -> int:
-
-        if by_emplacement:
-            sql = """
-            SELECT MAX(ident) ident
-            FROM pictures  
-            WHERE emplacement = :emplacement
-            """
-
-        else:
-            sql = """
-            SELECT nom, ident
-            FROM pictures  
-            WHERE nom like :filename
-                AND LENGTH(nom) = (
-                SELECT MAX(LENGTH(nom))
-                FROM pictures
-                WHERE nom like :filename) 
-            ORDER BY nom DESC
-            """
-
-        row = self.msl.select_one(sql, {
-            "filename": "%-%",
-            "emplacement": self.emplacement
-            })
-        ident_max = row.ident
-
-        return ident_max
 
     def check_fleches(self):
         left = self.cmds.get("Gauche")
@@ -968,19 +1036,27 @@ class Main:
         self.index = 1
         self.load_image(self.ident_min)
 
-    def previous_image(self):
+    def previous_image(self, nombre: int = 1):
         if self.ident <= self.ident_min:
             return
 
-        self.index -= 1
-        self.load_image(self.get_previous_image_ident())
+        if self.ident - nombre <= self.ident_min:
+            nombre = self.ident - self.ident_min
+        
+        self.index -= nombre
 
-    def next_image(self):
+        self.load_image(self.get_previous_image_ident(nombre))
+
+    def next_image(self, nombre: int = 1):
         if self.ident >= self.ident_max:
             return
 
-        self.index += 1
-        self.load_image(self.get_next_image_ident())
+        if self.ident + nombre >= self.ident_max:
+            nombre = self.ident_max - self.ident
+
+        self.index += nombre
+        
+        self.load_image(self.get_next_image_ident(nombre))
 
     def last_image(self):
         if self.ident >= self.ident_max:
@@ -1042,6 +1118,35 @@ class Main:
 
         return new_image, image_posx, image_posy
 
+    def get_last_saved_image(self):
+
+        sql = """
+        SELECT fichier ident
+        FROM last_picture
+        WHERE emplacement = :emplacement
+        """
+
+        row = self.msl.select_one(sql, {
+            "emplacement": self.emplacement
+            })
+
+        if row is None:
+            return None
+
+        return row.ident
+
+    def save_last_image(self):
+
+        self.msl.insert_or_update("last_picture", 
+            insert_data={
+                "emplacement": self.emplacement, 
+                "fichier": self.ident
+            }, 
+            update_data={
+                "fichier": self.ident
+            }, 
+            where_data={"emplacement": self.emplacement})
+
     def load_image(self, new_ident: int):
         # Chargement de l'image et des dimensions
         new_image, self.image_posx, self.image_posy = self.get_image(
@@ -1053,6 +1158,7 @@ class Main:
 
         self.ident = new_ident
         self.image_surface = new_image
+
         self.check_fleches()
 
     def resize(self):
@@ -1065,7 +1171,7 @@ class Main:
         elif self.ecran == 2:
             self.cmds.get("Gauche").set_pos(30, self.screen_height // 2 - 40)
             self.cmds.get("Droite").set_pos(self.screen_width - 110, self.screen_height // 2 - 40)
-            self.cmds.get("Fermer").set_pos(self.screen_width - 60, 10)
+            self.cmds.get("Quitter").set_pos(self.screen_width - 60, 10)
             self.load_image(self.ident)
 
             # Footer
@@ -1143,13 +1249,15 @@ class Main:
 
     def get_pictures_events(self):
         key_function: dict = {
-            pygame.K_ESCAPE: (self.load_ecran, 1),
+            pygame.K_ESCAPE: (self.load_ecran, 1, "BACK"),
             pygame.K_UP: (self.first_image,),
             pygame.K_HOME: (self.first_image,),
             pygame.K_DOWN: (self.last_image, ),
             pygame.K_END: (self.last_image,),
             pygame.K_LEFT: (self.previous_image,),
             pygame.K_RIGHT: (self.next_image,),
+            pygame.K_PAGEUP: (self.previous_image, 10),
+            pygame.K_PAGEDOWN: (self.next_image, 10),
         }
 
         type_event: dict = {
