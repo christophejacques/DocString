@@ -109,33 +109,34 @@ class MySQL:
     def create_table(self, drop_if_exists: bool = False):
 
         if drop_if_exists:
+            self.cu.execute("DROP TABLE IF EXISTS repertoires")
+
+        self.cu.execute("""CREATE TABLE IF NOT EXISTS repertoires(
+            emplacementid integer PRIMARY KEY AUTOINCREMENT,
+            emplacement text,
+            pictureid integer 
+        )""")
+
+        if drop_if_exists:
             self.cu.execute("DROP TABLE IF EXISTS pictures")
 
         self.cu.execute("""CREATE TABLE IF NOT EXISTS pictures(
             ident integer PRIMARY KEY AUTOINCREMENT,
-            emplacement text,
+            emplacementid integer,
             nom text
         )""")
 
-        if drop_if_exists:
-            self.cu.execute("DROP TABLE IF EXISTS last_picture")
-
-        self.cu.execute("""CREATE TABLE IF NOT EXISTS last_picture(
-            emplacement text,
-            fichier text
-        )""")
-
-    def file_exists(self, emplacement: str, nom: str, cursor) -> bool:
+    def file_exists(self, emplacementid: int, nom: str, cursor) -> bool:
 
         sql = """
             SELECT nom 
             FROM pictures 
             WHERE nom = :nom
-                AND emplacement = :emplacement
+                AND emplacementid = :emplacementid
             """
 
         requete = cursor.execute(sql, {
-            "emplacement": emplacement,
+            "emplacementid": emplacementid,
             "nom": nom
             })
         result = requete.fetchone()
@@ -165,6 +166,8 @@ class MySQL:
         myBd = sqlite3.connect(Variable.DATABASE_NAME)
         myCursor = myBd.cursor()
         need_commit: bool = False
+        repertoire_cree: bool = False
+        emplacementid: int = 0
 
         for windowsDirectory, _, fichiers in sorted(rep_init.walk(), key=walk_key_sort):
             
@@ -175,18 +178,50 @@ class MySQL:
                 key=natural_sort_key)
 
             nombre = len(files)
+            repertoire_cree = False
 
-            # Détection du nombre de fichier(s) manquant(s)
-            placeholders = ", ".join(["?"] * nombre)
+            # detection de presence du repertoire
             myCursor.execute("""
-                SELECT count(1)
-                FROM pictures  
-                WHERE emplacement = ?
-                  AND nom in (""" + placeholders + ")", 
-                (root, *files))
+                SELECT emplacementid
+                FROM repertoires
+                WHERE emplacement = :emplacement
+                """,
+                {"emplacement": root})
 
-            liste = myCursor.fetchone()
-            if liste[0] != nombre:
+            result = myCursor.fetchone()
+            if result is None:
+                # le repertoire n'existe pas, donc on le cree
+                need_commit = True
+                repertoire_cree = True
+                resultat = myCursor.execute("""
+                    INSERT INTO repertoires (emplacement)
+                    VALUES (:emplacement)
+                    """, 
+                    {"emplacement": root})
+
+                emplacementid = resultat.lastrowid
+                fprint("\n- Répertoire enregistré", f"(id:{emplacementid}) :", root, end="")
+
+            else:
+                # Le repertoire existe deja
+                emplacementid = result[0]
+
+            if repertoire_cree:
+                liste = (0,)
+
+            else:
+                # Détection du nombre de fichier(s) manquant(s)
+                placeholders = ", ".join(["?"] * nombre)
+                myCursor.execute("""
+                    SELECT count(1)
+                    FROM pictures  
+                    WHERE emplacementid = ?
+                      AND nom in (""" + placeholders + ")", 
+                    (emplacementid, *files))
+
+                liste = myCursor.fetchone()
+
+            if repertoire_cree or liste[0] != nombre:
                 need_commit = True
                 fprint("\nChecking:", root)
                 fprint("-", len(files), end=" fichier(s) dont ")
@@ -195,17 +230,18 @@ class MySQL:
                 #  Suppression de toutes les image(s) du répertoire
                 resultat = myCursor.execute("""
                     DELETE FROM pictures  
-                    WHERE emplacement = :emplacement
+                    WHERE emplacementid = :emplacementid
                     """, 
-                    {"emplacement": root})
+                    {"emplacementid": emplacementid})
 
                 fprint("-", f"{resultat.rowcount} images supprimées")
 
                 # Ajout de toutes les images
-                liste_images = [{"emplacement": root, "nom": img} for img in files]
+                liste_images = [
+                    {"emplacementid": emplacementid, "nom": img} for img in files]
                 resultat = myCursor.executemany("""
-                    INSERT INTO pictures (emplacement, nom)
-                    VALUES (:emplacement, :nom)
+                    INSERT INTO pictures (emplacementid, nom)
+                    VALUES (:emplacementid, :nom)
                     """, 
                     liste_images)
 
@@ -299,8 +335,9 @@ class MySQL:
         
         if ident is not None:
             myCursor.execute("""
-                SELECT emplacement, nom
-                FROM pictures 
+                SELECT rep.emplacementid, emplacement, nom
+                FROM pictures pic
+                INNER JOIN repertoires rep ON pic.emplacementid = rep.emplacementid
                 WHERE ident = :ident""", 
                 {"ident": ident})
 
@@ -313,6 +350,7 @@ class MySQL:
 
         row = myCursor.fetchone()
         emplacement = row.emplacement
+        emplacementid = row.emplacementid
         nom = row.nom
 
         myBd.close()
@@ -320,7 +358,7 @@ class MySQL:
         if row is None:
             return None
 
-        return (emplacement, nom)
+        return (emplacementid, emplacement, nom)
 
 
 def get_pygame_const_name(ident):
@@ -481,6 +519,7 @@ class Image(Commande):
         self.surface = kwargs.get("surface")
         self.nombre = kwargs.get("nombre", 0)
         self.directory = kwargs.get("emplacement", "")
+        self.emplacementid = kwargs.get("emplacementid", 0)
 
         self.nom_surf1 = Variable.SYS_FONT16.render(f"{self.nom[:19]}", False, (200, 200, 200))
         self.coords_nom1 = (coords[0]+1, coords[1]+1)
@@ -526,7 +565,7 @@ class Image(Commande):
         # fprint(f"Image {self.nom!r} Clicked")
         if self.callback:
             # self.callback(*self.params, self.nom)
-            self.callback(*self.params, self.directory)
+            self.callback(*self.params, self.emplacementid)
 
     def draw(self):
         if self.mouse_over:
@@ -683,6 +722,7 @@ class Main:
         self.ecran = 0
         self.mouse_pos_x, self.mouse_pos_y = 0, 0
 
+        self.emplacementid = 0
         self.emplacement = ""
 
         self.ident_min = 1
@@ -715,10 +755,10 @@ class Main:
         self.msl.create_table()
         # self.msl.read_files()
         apres = self.msl.count_table("pictures")
-        self.nb_collections = self.msl.count_table("pictures", distinct="emplacement")
+        self.nb_collections = self.msl.count_table("repertoires")
         fprint(apres, "image(s) présente(s) dans", self.nb_collections, "collections")
 
-    def init_datas(self, emplacement: str = ""):
+    def init_datas(self, emplacementid: int = 0):
         if self.ecran == 1:
             pygame.display.set_caption("Liste des répertoires")
 
@@ -731,7 +771,14 @@ class Main:
                 self.offset_max = ((self.nb_collections-1) // self.limit) * self.limit
 
         elif self.ecran == 2:
-            self.emplacement = f"{emplacement}"
+            self.emplacementid = emplacementid
+            sql = """
+                SELECT emplacement
+                FROM repertoires
+                WHERE emplacementid = :emplacementid
+            """
+            row = self.msl.select_one(sql, {"emplacementid": emplacementid})
+            self.emplacement = f"{row.emplacement}"
             pygame.display.set_caption(self.emplacement)
 
             # Footer
@@ -740,8 +787,8 @@ class Main:
             self.footer = pygame.Surface(taille, pygame.SRCALPHA)
 
             self.nb_images = self.msl.count_table("pictures", 
-                where="emplacement = :emplacement", data={
-                    "emplacement": emplacement
+                where="emplacementid = :emplacementid", data={
+                    "emplacementid": emplacementid
                 })
 
             self.ident_min = self.get_min_image_ident()
@@ -751,20 +798,24 @@ class Main:
             if ident is None:
                 self.index = 1
                 self.ident = self.ident_min
+            elif ident < self.ident_min or ident > self.ident_max:
+                self.index = 1
+                self.ident = self.ident_min
             else:
-                self.ident = int(ident)
+                self.ident = ident
                 self.index = self.msl.count_table("pictures", 
-                    where="emplacement = :emplacement and ident <= :ident", 
+                    where="emplacementid = :emplacementid and ident <= :ident", 
                     data={
-                        "emplacement": emplacement,
+                        "emplacementid": self.emplacementid,
                         "ident": self.ident
                     })
 
     def get_directories(self):
         sql = """
-        SELECT emplacement, MIN(ident) ident, MIN(nom) nom, COUNT(*) nombre
+        SELECT rep.emplacementid, emplacement, MIN(ident) ident, MIN(nom) nom, COUNT(*) nombre
         FROM pictures p 
-        GROUP BY emplacement
+        INNER JOIN repertoires rep ON p.emplacementid = rep.emplacementid
+        GROUP BY rep.emplacementid, emplacement
         ORDER BY emplacement
         LIMIT :limit
         OFFSET :offset
@@ -790,10 +841,12 @@ class Main:
             ident = row.ident
             nom = row.nom.split("-")[0]
             nombre = row.nombre
+            emplacementid = row.emplacementid
             emplacement = row.emplacement
             img = Image(ident, nom, (0, 50, 50), (20+170*idx, 80+220*idy, 150, 200), 
                 callback=self.load_ecran, params=(2, ),
                 surface=self.get_image, nombre=nombre,
+                emplacementid=emplacementid,
                 emplacement=emplacement)
             self.cmds.add(img)
 
@@ -951,11 +1004,11 @@ class Main:
         sql = """
         SELECT MIN(ident) ident
         FROM pictures  
-        WHERE emplacement = :emplacement
+        WHERE emplacementid = :emplacementid
         """
 
         row = self.msl.select_one(sql, {
-            "emplacement": self.emplacement
+            "emplacementid": self.emplacementid
             })
 
         ident_min = row.ident
@@ -966,7 +1019,7 @@ class Main:
         sql = """
         SELECT ident
         FROM pictures  
-        WHERE emplacement = :emplacement
+        WHERE emplacementid = :emplacementid
           AND ident > :ident
         ORDER BY ident
         LIMIT 1
@@ -974,7 +1027,7 @@ class Main:
         """
         datas: dict = {
             "ident": self.ident,
-            "emplacement": self.emplacement,
+            "emplacementid": self.emplacementid,
             "nombre": nombre-1
             }
 
@@ -986,7 +1039,7 @@ class Main:
         sql = """
         SELECT ident
         FROM pictures  
-        WHERE emplacement = :emplacement
+        WHERE emplacementid = :emplacementid
           AND ident < :ident
         ORDER BY ident DESC
         LIMIT 1
@@ -995,7 +1048,7 @@ class Main:
 
         row = self.msl.select_one(sql, {
             "ident": self.ident,
-            "emplacement": self.emplacement,
+            "emplacementid": self.emplacementid,
             "nombre": nombre-1
             })
 
@@ -1006,11 +1059,11 @@ class Main:
         sql = """
         SELECT MAX(ident) ident
         FROM pictures  
-        WHERE emplacement = :emplacement
+        WHERE emplacementid = :emplacementid
         """
 
         row = self.msl.select_one(sql, {
-            "emplacement": self.emplacement
+            "emplacementid": self.emplacementid
             })
 
         return row.ident
@@ -1073,7 +1126,7 @@ class Main:
             fprint("Image:", ident_image, "introuvable dans la bdd", flush=True)
             return None, 0, 0
 
-        emplacement, nom = info_image
+        emplacementid, emplacement, nom = info_image
         fichier = Path(emplacement) / nom
         if not fichier.exists():
             fprint("Image:", nom, "introuvable sur le disque", flush=True)
@@ -1121,13 +1174,13 @@ class Main:
     def get_last_saved_image(self):
 
         sql = """
-        SELECT fichier ident
-        FROM last_picture
-        WHERE emplacement = :emplacement
+        SELECT pictureid ident
+        FROM repertoires
+        WHERE emplacementid = :emplacementid
         """
 
         row = self.msl.select_one(sql, {
-            "emplacement": self.emplacement
+            "emplacementid": self.emplacementid
             })
 
         if row is None:
@@ -1137,15 +1190,11 @@ class Main:
 
     def save_last_image(self):
 
-        self.msl.insert_or_update("last_picture", 
-            insert_data={
-                "emplacement": self.emplacement, 
-                "fichier": self.ident
-            }, 
+        self.msl.update("repertoires", 
             update_data={
-                "fichier": self.ident
+                "pictureid": self.ident
             }, 
-            where_data={"emplacement": self.emplacement})
+            where_data={"emplacementid": self.emplacementid})
 
     def load_image(self, new_ident: int):
         # Chargement de l'image et des dimensions
