@@ -7,7 +7,7 @@ from selectolax.parser import HTMLParser, Node
 from loguru import logger
 from time import sleep
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Generator
 
 
 # logger.trace
@@ -19,12 +19,28 @@ from typing import Optional
 # logger.critical
 
 SAVE_FILENAME: str = "_lastURL.cfg"
+BASE_URL: Optional[str]
+GEN_URL: Generator
 
 # 
 last_directory: str = ""
-url = """
-https://e-hentai.org/s/1cf2dad5c8/3339274-1
+urls = """
+https://e-hentai.org/s/dfa571b894/4035523-1
+https://e-hentai.org/s/cd561f7ba0/4035526-1
+
 """
+
+
+def get_url(urls):
+    for url in urls.strip().split("\n"):
+        yield url.strip()
+
+
+GEN_URL = get_url(urls)
+
+
+def gen_next_url():
+    return next(GEN_URL)
 
 
 def get_last_url() -> Optional[str]:
@@ -34,20 +50,25 @@ def get_last_url() -> Optional[str]:
     with open(SAVE_FILENAME) as fhandle:
         url = fhandle.read()
 
-    return url.strip()
+    url = url.strip()
+    logger.info(f"URL de recherche chargé: {url}")
+    return url
 
 
 def save_last_url(url: str):
     with open(SAVE_FILENAME, "w") as fhandle:
         fhandle.write(f"{url}".strip())
 
+    logger.info(f"URL de recherche Sauvegardé: {url}")
+
 
 last_url = get_last_url()
-if last_url is not None:
-    url = last_url
+if last_url is None:
+    BASE_URL = gen_next_url()
+else:
+    BASE_URL = last_url
 
 
-BASE_URL: str = url.strip()
 MAX_TEL: int = 2000
 
 
@@ -127,7 +148,9 @@ def download(session: requests.Session, directory: str, nom_fichier: str, url: O
         fh_img.write(response.content)
 
 
-def main() -> None:
+def main() -> Optional[bool]:
+    resultat: Node 
+
     # creation de la session pour tous les acces au site
     session: requests.Session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
@@ -135,7 +158,7 @@ def main() -> None:
     directory: Path = Path(".")
     last_directory: str = ""
     nom_fichier: str = ""
-    next_url: str = BASE_URL
+    next_url: Optional[str] = BASE_URL
     url: str = ""
     nombre: int = 0
     current: str = ""
@@ -144,17 +167,22 @@ def main() -> None:
     file_already_downloaded: bool = False
 
     while next_url != url and not file_already_downloaded:
-        url = next_url
+
+        if next_url is None:
+            url = ""
+        else:
+            url = next_url
 
         # HEADER.update({"Referer": get_referer(url)})
         retry = 3
         while retry > 0:
-            response = session.get(url, timeout=5, headers=HEADER)
             try:
+                response = session.get(url, timeout=5, headers=HEADER)
                 response.raise_for_status()
             except Exception as erreur:
                 logger.error(f"Erreur: {erreur}")
-                return
+                # return Error = True
+                return True
 
             msg = f"Scraping {url}"
             if total != "" and current.isdigit():
@@ -163,13 +191,12 @@ def main() -> None:
             logger.success(msg)
 
             tree = HTMLParser(response.text)
-            resultat: Node = tree.css_first("img#img")
+            resultat = tree.css_first("img#img")
             if not resultat or resultat is None:
                 retry -= 1
                 if retry == 0:
                     save_last_url(url)
-                    logger.info(f"URL de recherche Sauvegardé: {url}")
-
+                    
                 elif retry > 0:
                     msg = "Aucune image '#img' dans la page d'index"
                     msg += f", Reste {retry} retry."
@@ -220,23 +247,41 @@ def main() -> None:
                 break
 
         else:
-            download(session, str(directory), nom_fichier, resultat.attributes['src'])
-            nombre += 1
+            try:
+                download(session, str(directory), nom_fichier, resultat.attributes['src'])
+                nombre += 1
+            except Exception:
+                logger.error("Erreur de téléchargement")
+                save_last_url(url)
+                nombre = MAX_TEL
+                retry = 0
 
         if nombre < MAX_TEL:
             sleep(0.3)
 
             if resultat.parent:
-                next_url = resultat.parent.attributes['href']
+                temp_ref = resultat.parent.attributes['href']
+                if temp_ref is not None:
+                    next_url = temp_ref
 
     if not last_directory:
         last_directory = f"{directory}".encode().decode()
     logger.info(f"Repertoire utilise: {last_directory}")
 
+    # return Error = False
+    return retry == 0
+
 
 if __name__ == '__main__':
     try:
-        main()
+        while BASE_URL:
+            if main():
+                break
+
+            try:
+                BASE_URL = gen_next_url()
+            except StopIteration:
+                BASE_URL = None
 
     except Exception:
         logger.critical(traceback.format_exc())

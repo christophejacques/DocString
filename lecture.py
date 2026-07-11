@@ -16,6 +16,7 @@ def fprint(*args, **kwargs):
 
 class Variable: 
     DATABASE_NAME: str = "pictures.db"
+    REINITIALIZE: bool = False
 
     # DIRECTORY: str = r"E:\Jeux\World of Warcraft\_retail_\Screenshots"
     # SUB_DIRECTORY: str = "."
@@ -23,7 +24,13 @@ class Variable:
     DIRECTORY: str = r""
     SUB_DIRECTORY: str = "img"
 
-    # DIRECTORY: str = r"F:\Images\Hentai"
+    # DIRECTORY: str = r"D:\Mes Documents\Images"
+    # SUB_DIRECTORY: str = "."
+
+    # DIRECTORY: str = r"F:\Images"
+    # SUB_DIRECTORY: str = "."
+
+    # DIRECTORY: str = r"G:\Videos"
     # SUB_DIRECTORY: str = "."
 
     SYS_FONT16: pygame.font.Font
@@ -106,7 +113,22 @@ class MySQL:
         self.cu.execute(sql, data)
         self.cx.commit()
 
-    def create_table(self, drop_if_exists: bool = False):
+    def initialize_database(self, drop_if_exists: bool = False):
+
+        if drop_if_exists:
+            self.cu.execute("DROP TABLE IF EXISTS config")
+
+        self.cu.execute("""CREATE TABLE IF NOT EXISTS config(
+            cle text,
+            valeur integer            
+        )""")
+
+        result = self.count_table("config")
+        if result == 0:
+            fprint("Initialisation de la table config.")
+            self.insert("config", {"cle": "ecran", "valeur": 1})
+            self.insert("config", {"cle": "emplacementid", "valeur": 0})
+            self.insert("config", {"cle": "offset", "valeur": 0})
 
         if drop_if_exists:
             self.cu.execute("DROP TABLE IF EXISTS repertoires")
@@ -179,6 +201,10 @@ class MySQL:
 
             nombre = len(files)
             repertoire_cree = False
+
+            if nombre == 0:
+                # on ne crée rien s'il n'y a pas de fichier
+                continue
 
             # detection de presence du repertoire
             myCursor.execute("""
@@ -260,7 +286,6 @@ class MySQL:
         where = ','.join(map(lambda champ: f"{champ} = :{champ}", where_data.keys()))
 
         result = self.count_table(table, where=where, data=where_data)
-        # fprint("count", table, ":", result)
 
         if result == 0:
             self.insert(table, insert_data)
@@ -294,7 +319,6 @@ class MySQL:
         sql += ','.join(map(lambda champ: f":{champ}", liste_valeurs))
         sql += ")"
 
-        # fprint(sql)
         result = self.cu.execute(sql, datas)
 
         # fprint("Resultat insert:", result)
@@ -320,7 +344,7 @@ class MySQL:
 
         return row
 
-    def select_all(self, sql: str, datas: dict):
+    def select_all(self, sql: str, datas: dict = {}):
 
         self.cu.execute(sql, datas)
         rows = self.cu.fetchall()
@@ -521,11 +545,27 @@ class Image(Commande):
         self.directory = kwargs.get("emplacement", "")
         self.emplacementid = kwargs.get("emplacementid", 0)
 
-        self.nom_surf1 = Variable.SYS_FONT16.render(f"{self.nom[:19]}", False, (200, 200, 200))
+        debut = min(30, len(self.nom))
+        nom = self.nom[:debut]
+
+        self.nom_surf1 = Variable.SYS_FONT16.render(f"{nom}", False, (200, 200, 200))
         self.coords_nom1 = (coords[0]+1, coords[1]+1)
 
-        if len(nom) > 18:
-            self.nom_surf2 = Variable.SYS_FONT16.render(f"{self.nom[19:]}", False, (200, 200, 200))
+        while coords[2] < self.nom_surf1.get_width() and debut > 1:
+            debut -= 1
+            nom = self.nom[:debut]
+            self.nom_surf1 = Variable.SYS_FONT16.render(f"{nom}", False, (200, 200, 200))
+
+        if len(self.nom) > len(nom):
+            fin = 60
+            nom = self.nom[debut:fin]
+            self.nom_surf2 = Variable.SYS_FONT16.render(f"{nom}", False, (200, 200, 200))
+
+            while coords[2] < self.nom_surf2.get_width() and fin > 1:
+                fin -= 1
+                nom = self.nom[debut:fin]
+                self.nom_surf2 = Variable.SYS_FONT16.render(f"{nom}", False, (200, 200, 200))
+
             self.coords_nom2 = (coords[0]+1, coords[1]+21)
             taille = (coords[2], 40)
         else:
@@ -547,6 +587,33 @@ class Image(Commande):
         self.footer.blit(self.nb_surf, (epaisseur, 1))
         
         self.dir_surf = Variable.SYS_FONT24.render(f"{self.directory}", False, (200, 200, 0))
+
+        repertoire = f"{self.directory}"
+        taille_rep = len(repertoire)
+        repertoire_split = repertoire.split()
+        taille_max = self.screen.get_width() - 350
+        nombre = len(repertoire.split())
+        self.dir_surf2 = None
+
+        while nombre > 1 and self.dir_surf.get_width() > taille_max:
+            nombre -= 1
+            taille_rep = len(" ".join(repertoire_split[:nombre]))
+            self.dir_surf = Variable.SYS_FONT24.render(
+                f"{repertoire[:taille_rep]}", False, (200, 200, 0))
+
+            repertoire2 = repertoire[taille_rep:].strip()
+            taille_rep2 = len(repertoire)
+            repertoire_split2 = repertoire2.split()
+            nombre2 = len(repertoire2.split())
+            self.dir_surf2 = Variable.SYS_FONT24.render(
+                f"{repertoire2}", False, (200, 200, 0))
+
+        if self.dir_surf2:
+            while nombre2 > 1 and self.dir_surf2.get_width() > taille_max:
+                nombre2 -= 1
+                taille_rep2 = len(" ".join(repertoire_split2[:nombre2]))
+                self.dir_surf2 = Variable.SYS_FONT24.render(
+                    f"{repertoire2[:taille_rep2]}", False, (200, 200, 0))
 
         # Chargement de l'image en temps reel
         # self.init_thread(ident, self.coords_img[2:])
@@ -584,6 +651,8 @@ class Image(Commande):
 
             if self.mouse_over:
                 self.screen.blit(self.dir_surf, (200, 10))
+                if self.dir_surf2:
+                    self.screen.blit(self.dir_surf2, (200, 38))
 
         self.screen.blit(self.footer, self.footer_position)
 
@@ -738,7 +807,7 @@ class Main:
 
         self.cmds = Commandes()
         self.load_database()
-        self.load_ecran(1)
+        self.load_config()
 
     def get_fonts(self):
         liste_polices = pygame.font.get_fonts()
@@ -752,11 +821,64 @@ class Main:
 
     def load_database(self):
         self.msl = MySQL(Variable.DATABASE_NAME)
-        self.msl.create_table()
-        # self.msl.read_files()
+        self.msl.initialize_database(Variable.REINITIALIZE)
+        
         apres = self.msl.count_table("pictures")
         self.nb_collections = self.msl.count_table("repertoires")
         fprint(apres, "image(s) présente(s) dans", self.nb_collections, "collections")
+
+    def load_config(self):
+        sql = """
+                SELECT cle, valeur
+                FROM config
+            """
+        emplacementid = None
+        ecran = 1
+        rows = self.msl.select_all(sql)
+        # fprint("load :")
+        for row in rows:
+            # fprint("-", row.cle, "=", row.valeur)
+            if row.cle == "ecran":
+                ecran = row.valeur
+            elif row.cle == "emplacementid":
+                emplacementid = row.valeur
+            elif row.cle == "offset":
+                self.offset = row.valeur
+
+        if emplacementid is None:
+            self.load_ecran(ecran, save_config=False)
+        else:
+            self.load_ecran(ecran, emplacementid, save_config=False)
+
+    def save_config(self, ecran=0, emplacementid=None, offset=False):
+        DEBUG = False
+        
+        if DEBUG:        
+            fprint("save:")
+
+        if ecran in (1, 2):
+            if DEBUG:        
+                fprint("- ecran", ecran)
+
+            self.msl.update("config", 
+                update_data={"valeur": ecran},
+                where_data={"cle": "ecran"})
+
+        if emplacementid is not None and str(emplacementid).isdigit():
+            if DEBUG:
+                fprint("- emplacementid", emplacementid)
+
+            self.msl.update("config", 
+                update_data={"valeur": emplacementid},
+                where_data={"cle": "emplacementid"})
+
+        if offset:
+            if DEBUG:        
+                fprint("- offset", self.offset)
+
+            self.msl.update("config", 
+                update_data={"valeur": self.offset},
+                where_data={"cle": "offset"})
 
     def init_datas(self, emplacementid: int = 0):
         if self.ecran == 1:
@@ -791,8 +913,10 @@ class Main:
                     "emplacementid": emplacementid
                 })
 
-            self.ident_min = self.get_min_image_ident()
-            self.ident_max = self.get_max_image_ident()
+            self.ident_min, self.ident_max = self.get_min_max_image_ident()
+
+            # self.ident_min = self.get_min_image_ident()
+            # self.ident_max = self.get_max_image_ident()
 
             ident = self.get_last_saved_image()
             if ident is None:
@@ -821,7 +945,8 @@ class Main:
         OFFSET :offset
         """
 
-        rows = self.msl.select_all(sql, {"limit": self.limit, "offset": self.offset})
+        rows = self.msl.select_all(sql, 
+            {"limit": self.limit, "offset": self.offset})
         return rows
 
     def load_directories(self):
@@ -839,7 +964,8 @@ class Main:
         idx = 0
         for row in self.get_directories():
             ident = row.ident
-            nom = row.nom.split("-")[0]
+            # nom = row.nom.split("-")[0]
+            nom = row.nom
             nombre = row.nombre
             emplacementid = row.emplacementid
             emplacement = row.emplacement
@@ -872,6 +998,7 @@ class Main:
 
         # simulation du mouvement de la souris
         self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+        self.save_config(offset=True)
 
     def previous_directory(self):
         if self.offset == 0:
@@ -892,6 +1019,7 @@ class Main:
 
         # simulation du mouvement de la souris
         self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+        self.save_config(offset=True)
 
     def next_directory(self):
         if self.offset + self.limit >= self.nb_collections:
@@ -908,6 +1036,7 @@ class Main:
 
         # simulation du mouvement de la souris
         self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+        self.save_config(offset=True)
 
     def last_directory(self):
         if self.offset + self.limit >= self.nb_collections:
@@ -925,8 +1054,9 @@ class Main:
 
         # simulation du mouvement de la souris
         self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+        self.save_config(offset=True)
 
-    def load_ecran(self, numero, *params):
+    def load_ecran(self, numero, *params, save_config=True):
         # fprint("load ecran", numero, params)
         self.ecran = numero
         self.cmds.clear()
@@ -935,6 +1065,9 @@ class Main:
             if len(params) > 0 and params[0] == "BACK":
                 # sauvegarde de la dernière image consultée
                 self.save_last_image()
+                self.save_config(1)
+            elif save_config:
+                self.save_config(1, offset=True)
 
             halt = Box("Quitter", (0, 200, 200), (10, 10, 50, 50), 
                 callback=self.stop_running)
@@ -968,6 +1101,9 @@ class Main:
             self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
 
         elif numero == 2:
+            if save_config:
+                self.save_config(2, *params)
+
             # Image du repertoire selectionne
             refresh = Box("Back", (0, 200, 200), (10, 10, 50, 50),
                 callback=self.load_ecran, params=(1, "BACK"))
@@ -992,12 +1128,32 @@ class Main:
 
     def stop_running(self):
         self.running = False
+        if self.ecran == 2:
+            self.save_last_image()
 
     def update_database(self):
         if self.updating is None:
             self.cmds.get("Refresh").set_exec_color((200, 0, 0))
             self.updating = Thread(target=self.msl.add_file)
             self.updating.start()
+
+    def get_min_max_image_ident(self) -> Tuple[int, int]:
+    
+        sql = """
+        SELECT MIN(ident) minident,
+               MAX(ident) maxident
+        FROM pictures  
+        WHERE emplacementid = :emplacementid
+        """
+
+        row = self.msl.select_one(sql, {
+            "emplacementid": self.emplacementid
+            })
+
+        ident_min = row.minident
+        ident_max = row.maxident
+
+        return ident_min, ident_max
 
     def get_min_image_ident(self) -> int:
 
@@ -1046,12 +1202,13 @@ class Main:
         OFFSET :nombre
         """
 
-        row = self.msl.select_one(sql, {
+        datas = {
             "ident": self.ident,
             "emplacementid": self.emplacementid,
             "nombre": nombre-1
-            })
+            }
 
+        row = self.msl.select_one(sql, datas)
         return row.ident
 
     def get_max_image_ident(self) -> int:
@@ -1102,6 +1259,7 @@ class Main:
 
     def next_image(self, nombre: int = 1):
         if self.ident >= self.ident_max:
+            fprint("ident MAX reached")
             return
 
         if self.ident + nombre >= self.ident_max:
@@ -1132,6 +1290,9 @@ class Main:
             fprint("Image:", nom, "introuvable sur le disque", flush=True)
             return None, 0, 0
 
+        coef: float = 1.0
+        size_width, size_height = size
+
         with open(fichier) as fhandle:
             try:
                 new_image = pygame.image.load(fhandle)
@@ -1140,10 +1301,14 @@ class Main:
             except Exception as erreur:
                 fprint(f"Erreur lors du chargement de l'image: {fichier}")
                 fprint(erreur)
-                return None, 0, 0
+                self.nom_surface = Variable.SYS_FONT24.render(f"{nom}", False, (200, 200, 0))
 
-        coef: float = 1.0
-        size_width, size_height = size
+                compteur = f"{self.index:^5_} / {self.nb_images:^5_}".replace("_", " ")
+                self.compteur_surf = Variable.SYS_FONT24.render(f"{compteur}", False, (200, 200, 0))
+                tx, ty = self.compteur_surf.get_size()
+                self.compteur_position = size_width - 10 - tx, 4
+
+                return None, 0, 0
 
         if w/h > size_width/size_height and w != 0:
             coef = size_width / w
@@ -1189,7 +1354,7 @@ class Main:
         return row.ident
 
     def save_last_image(self):
-
+        
         self.msl.update("repertoires", 
             update_data={
                 "pictureid": self.ident
@@ -1197,16 +1362,20 @@ class Main:
             where_data={"emplacementid": self.emplacementid})
 
     def load_image(self, new_ident: int):
+
+        # fprint("load_image:", new_ident)
+
         # Chargement de l'image et des dimensions
         new_image, self.image_posx, self.image_posy = self.get_image(
             new_ident, (self.screen_width, self.screen_height))
         # new_image.set_alpha(255)
 
         if new_image is None:
-            return
+            self.image_surface = None
 
-        self.ident = new_ident
-        self.image_surface = new_image
+        else:
+            self.image_surface = new_image
+            self.ident = new_ident
 
         self.check_fleches()
 
@@ -1349,8 +1518,9 @@ class Main:
                 self.screen.blit(self.image_surface, (self.image_posx, self.image_posy))
 
             self.footer.fill((10, 10, 10, 128))
-            self.footer.blit(self.nom_surface, (10, 4))
-            self.footer.blit(self.compteur_surf, self.compteur_position)
+            if self.nom_surface:
+                self.footer.blit(self.nom_surface, (10, 4))        
+                self.footer.blit(self.compteur_surf, self.compteur_position)
             self.screen.blit(self.footer, self.footer_position)
         
         self.cmds.draw()
