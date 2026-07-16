@@ -15,17 +15,18 @@ def fprint(*args, **kwargs):
 
 
 class Variable: 
+    # DATABASE_NAME: str = ":memory:"
     DATABASE_NAME: str = "pictures.db"
     REINITIALIZE: bool = False
 
     # DIRECTORY: str = r"E:\Jeux\World of Warcraft\_retail_\Screenshots"
     # SUB_DIRECTORY: str = "."
 
-    DIRECTORY: str = r""
-    SUB_DIRECTORY: str = "img"
+    # DIRECTORY: str = r""
+    # SUB_DIRECTORY: str = "img"
 
-    # DIRECTORY: str = r"D:\Mes Documents\Images"
-    # SUB_DIRECTORY: str = "."
+    DIRECTORY: str = r"pornpics"
+    SUB_DIRECTORY: str = ""
 
     # DIRECTORY: str = r"F:\Images"
     # SUB_DIRECTORY: str = "."
@@ -59,14 +60,19 @@ class Factory:
 
 # Fonction pour diviser le texte en morceaux de chaînes et de nombres
 def natural_sort_key(s):
-    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+    return [int(text) if text.isdigit() else text.lower() 
+            for text in re.split(r'(\d+)', s)]
 
 
 class MySQL:
 
     def __init__(self, dbname: str):
-        # dbname = ":memory:"
-        self.cx = sqlite3.connect(dbname)
+        if "memory" in dbname:
+            self.cx = sqlite3.connect("file:mabase?mode=memory&cache=shared", 
+                uri=True)
+        else:
+            self.cx = sqlite3.connect(dbname)
+
         self.cx.row_factory = Factory.namedtuple
         self.cu = self.cx.cursor()
 
@@ -99,7 +105,11 @@ class MySQL:
         result = requete.fetchone()
         
         return result.nombre
-        # return result[0]
+
+    def drop_table(self, table: str):
+
+        self.cu.execute("DROP TABLE IF EXISTS :table",
+            {"table": table})
 
     def delete_table(self, 
       tablename: str, 
@@ -116,7 +126,7 @@ class MySQL:
     def initialize_database(self, drop_if_exists: bool = False):
 
         if drop_if_exists:
-            self.cu.execute("DROP TABLE IF EXISTS config")
+            self.drop_table("config")
 
         self.cu.execute("""CREATE TABLE IF NOT EXISTS config(
             cle text,
@@ -131,7 +141,7 @@ class MySQL:
             self.insert("config", {"cle": "offset", "valeur": 0})
 
         if drop_if_exists:
-            self.cu.execute("DROP TABLE IF EXISTS repertoires")
+            self.drop_table("repertoires")
 
         self.cu.execute("""CREATE TABLE IF NOT EXISTS repertoires(
             emplacementid integer PRIMARY KEY AUTOINCREMENT,
@@ -140,7 +150,7 @@ class MySQL:
         )""")
 
         if drop_if_exists:
-            self.cu.execute("DROP TABLE IF EXISTS pictures")
+            self.drop_table("pictures")
 
         self.cu.execute("""CREATE TABLE IF NOT EXISTS pictures(
             ident integer PRIMARY KEY AUTOINCREMENT,
@@ -148,7 +158,7 @@ class MySQL:
             nom text
         )""")
 
-    def file_exists(self, emplacementid: int, nom: str, cursor) -> bool:
+    def file_exists(self, emplacementid: int, nom: str) -> bool:
 
         sql = """
             SELECT nom 
@@ -157,7 +167,7 @@ class MySQL:
                 AND emplacementid = :emplacementid
             """
 
-        requete = cursor.execute(sql, {
+        requete = self.cu.execute(sql, {
             "emplacementid": emplacementid,
             "nom": nom
             })
@@ -185,7 +195,12 @@ class MySQL:
         rep_init = Path(Variable.SUB_DIRECTORY)
         extensions = ("jpg", "bmp", "webp", "gif", "jpeg", "png", "tiff")
 
-        myBd = sqlite3.connect(Variable.DATABASE_NAME)
+        if "memory" in Variable.DATABASE_NAME:
+            myBd = sqlite3.connect("file:mabase?mode=memory&cache=shared", 
+                uri=True)
+        else:
+            myBd = sqlite3.connect(Variable.DATABASE_NAME)
+
         myCursor = myBd.cursor()
         need_commit: bool = False
         repertoire_cree: bool = False
@@ -280,10 +295,13 @@ class MySQL:
         fprint("done")
         myBd.close()
 
-    def insert_or_update(self, table: str, insert_data: dict, update_data: dict,
+    def insert_or_update(self, table: str, 
+            insert_data: dict, 
+            update_data: dict,
             where_data: dict = dict()):
 
-        where = ','.join(map(lambda champ: f"{champ} = :{champ}", where_data.keys()))
+        where = ','.join(map(lambda champ: f"{champ} = :{champ}", 
+            where_data.keys()))
 
         result = self.count_table(table, where=where, data=where_data)
 
@@ -296,11 +314,13 @@ class MySQL:
     
         sql = f"UPDATE {table} "
         sql += "SET "
-        sql += ','.join(map(lambda champ: f"{champ} = :{champ}", update_data.keys()))
+        sql += ','.join(map(lambda champ: f"{champ} = :{champ}", 
+            update_data.keys()))
 
         if where_data:
             sql += " WHERE "
-            sql += ','.join(map(lambda champ: f"{champ} = :{champ}", where_data.keys()))
+            sql += ','.join(map(lambda champ: f"{champ} = :{champ}", 
+                where_data.keys()))
 
         datas = update_data.copy()
         datas.update(where_data)
@@ -308,6 +328,7 @@ class MySQL:
 
         result = self.cu.execute(sql, datas)
         self.cx.commit()
+        return result
 
     def insert(self, table: str, datas: dict):
 
@@ -323,6 +344,7 @@ class MySQL:
 
         # fprint("Resultat insert:", result)
         self.cx.commit()
+        return result
 
     def read_files(self):
         sql = "SELECT ident, nom FROM pictures"
@@ -353,7 +375,12 @@ class MySQL:
 
     def select_img(self, ident=None, nom=None) -> Optional[Tuple]:
         # 2. Récupération des informations de l'image
-        myBd = sqlite3.connect(Variable.DATABASE_NAME)
+        if "memory" in Variable.DATABASE_NAME:
+            myBd = sqlite3.connect("file:mabase?mode=memory&cache=shared", 
+                uri=True)
+        else:
+            myBd = sqlite3.connect(Variable.DATABASE_NAME)
+
         myBd.row_factory = Factory.namedtuple
         myCursor = myBd.cursor()
         
@@ -678,6 +705,14 @@ class Fleche(Commande):
         self.nb_fleches = 10
         self.diff = 100 // self.nb_fleches
         self.total = self.largeur * (self.nb_fleches - 1)
+        self.update(kwargs.get("libelle", ""))
+
+    def update(self, libelle):
+        if libelle.strip() == "":
+            self.page_surf = None
+        else:
+            self.page_surf = Variable.SYS_FONT24.render(libelle, 
+                False, (200, 200, 0))
 
     def mouse_click(self):
         # fprint(f"Fleche {self.name!r} Clicked")
@@ -715,7 +750,8 @@ class Fleche(Commande):
             pygame.draw.line(self.screen, color, (x2g, yh), (x2d, ym), self.largeur)
             pygame.draw.line(self.screen, color, (x2g, yb), (x2d, ym), self.largeur)
         
-        # pygame.draw.rect(self.screen, (255, 0, 0), (self.coords), 1)
+        if self.mouse_over and self.page_surf:
+            self.screen.blit(self.page_surf, (200, 10))
 
 
 class Commandes:
@@ -786,6 +822,8 @@ class Main:
         self.screen_width, self.screen_height = self.screen.get_size()
         self.image_posx = 0
         self.image_posy = 0
+        self.width = 0
+        self.height = 0
         self.updating = None
         self.running = True
         self.ecran = 0
@@ -827,6 +865,13 @@ class Main:
         self.nb_collections = self.msl.count_table("repertoires")
         fprint(apres, "image(s) présente(s) dans", self.nb_collections, "collections")
 
+    def reload_database(self):
+        apres = self.msl.count_table("pictures")
+        self.nb_collections = self.msl.count_table("repertoires")
+        fprint(apres, "image(s) présente(s) dans", self.nb_collections, "collections")
+
+        self.load_ecran(1, save_config=False)
+
     def load_config(self):
         sql = """
                 SELECT cle, valeur
@@ -835,9 +880,8 @@ class Main:
         emplacementid = None
         ecran = 1
         rows = self.msl.select_all(sql)
-        # fprint("load :")
+
         for row in rows:
-            # fprint("-", row.cle, "=", row.valeur)
             if row.cle == "ecran":
                 ecran = row.valeur
             elif row.cle == "emplacementid":
@@ -915,16 +959,15 @@ class Main:
 
             self.ident_min, self.ident_max = self.get_min_max_image_ident()
 
-            # self.ident_min = self.get_min_image_ident()
-            # self.ident_max = self.get_max_image_ident()
-
             ident = self.get_last_saved_image()
             if ident is None:
                 self.index = 1
                 self.ident = self.ident_min
+
             elif ident < self.ident_min or ident > self.ident_max:
                 self.index = 1
                 self.ident = self.ident_min
+
             else:
                 self.ident = ident
                 self.index = self.msl.count_table("pictures", 
@@ -956,6 +999,12 @@ class Main:
         emplacement: str
 
         # fprint(f"load_directories({self.offset, self.limit})")
+        
+        # Mise à jour des libelles des fleches
+        num_page = self.offset // self.limit
+        nombre_pages = 1 + self.nb_collections // self.limit
+        self.cmds.get("Gauche").update(f"Page {num_page} / {nombre_pages}")
+        self.cmds.get("Droite").update(f"Page {2+num_page} / {nombre_pages}")
 
         while self.cmds.last().__class__ is Image:
             self.cmds.pop()
@@ -964,7 +1013,7 @@ class Main:
         idx = 0
         for row in self.get_directories():
             ident = row.ident
-            # nom = row.nom.split("-")[0]
+
             nom = row.nom
             nombre = row.nombre
             emplacementid = row.emplacementid
@@ -1069,6 +1118,8 @@ class Main:
             elif save_config:
                 self.save_config(1, offset=True)
 
+            self.init_datas()
+
             halt = Box("Quitter", (0, 200, 200), (10, 10, 50, 50), 
                 callback=self.stop_running)
             self.cmds.add(halt)
@@ -1077,7 +1128,7 @@ class Main:
             refresh = Box("Refresh", (200, 20, 20), (self.screen_width-60, 10, 50, 50),
                 callback=self.update_database, thread=True)
             self.cmds.add(refresh)
-
+            
             precedente = Fleche("Gauche", (0, 200, 200), (
                 80, 10, 50, 50), "LEFT",
                 callback=self.previous_directory)
@@ -1091,7 +1142,6 @@ class Main:
                 callback=self.next_directory)
             self.cmds.add(suivante)
 
-            self.init_datas()
             self.load_directories()
 
             if self.offset + self.limit >= self.nb_collections:
@@ -1103,6 +1153,8 @@ class Main:
         elif numero == 2:
             if save_config:
                 self.save_config(2, *params)
+
+            self.init_datas(*params)
 
             # Image du repertoire selectionne
             refresh = Box("Back", (0, 200, 200), (10, 10, 50, 50),
@@ -1123,7 +1175,6 @@ class Main:
                 callback=self.next_image)
             self.cmds.add(suivante)
 
-            self.init_datas(*params)
             self.load_image(self.ident)
 
     def stop_running(self):
@@ -1259,7 +1310,6 @@ class Main:
 
     def next_image(self, nombre: int = 1):
         if self.ident >= self.ident_max:
-            fprint("ident MAX reached")
             return
 
         if self.ident + nombre >= self.ident_max:
@@ -1292,11 +1342,13 @@ class Main:
 
         coef: float = 1.0
         size_width, size_height = size
+        self.width, self.height = 0, 0
+        self.size_surface = None
 
         with open(fichier) as fhandle:
             try:
                 new_image = pygame.image.load(fhandle)
-                w, h = new_image.get_size()
+                self.width, self.height = new_image.get_size()
 
             except Exception as erreur:
                 fprint(f"Erreur lors du chargement de l'image: {fichier}")
@@ -1308,31 +1360,36 @@ class Main:
                 tx, ty = self.compteur_surf.get_size()
                 self.compteur_position = size_width - 10 - tx, 4
 
+                self.size_surface = None
+                self.size_position = self.compteur_position[0] - 100, 4
+
                 return None, 0, 0
 
-        if w/h > size_width/size_height and w != 0:
-            coef = size_width / w
-        elif h != 0:
-            coef = size_height / h
+        if self.width/self.height > size_width/size_height and self.width != 0:
+            coef = size_width / self.width
+        elif self.height != 0:
+            coef = size_height / self.height
 
-        if coef != 1.0:
-            width = int(w * coef)
-            height = int(h * coef)
+        if coef != 1:
+            width = int(self.width * coef)
+            height = int(self.height * coef)
             new_image = pygame.transform.scale(new_image, (width, height))
-            
-            image_posx = (size_width - width) // 2
-            image_posy = (size_height - height) // 2
-
         else:
-            image_posx = 0
-            image_posy = 0
+            width, height = self.width, self.height
+            
+        image_posx = (size_width - width) // 2
+        image_posy = (size_height - height) // 2
 
         self.nom_surface = Variable.SYS_FONT24.render(f"{nom}", False, (200, 200, 0))
+        self.size_surface = Variable.SYS_FONT24.render(
+            f"{self.width}x{self.height}  -", False, (200, 200, 0))
 
         compteur = f"{self.index:^5_} / {self.nb_images:^5_}".replace("_", " ")
         self.compteur_surf = Variable.SYS_FONT24.render(f"{compteur}", False, (200, 200, 0))
         tx, ty = self.compteur_surf.get_size()
         self.compteur_position = size_width - 10 - tx, 4
+        self.size_position = self.compteur_position[0] - (
+            self.size_surface.get_width()) - 4, 4
 
         return new_image, image_posx, image_posy
 
@@ -1362,8 +1419,6 @@ class Main:
             where_data={"emplacementid": self.emplacementid})
 
     def load_image(self, new_ident: int):
-
-        # fprint("load_image:", new_ident)
 
         # Chargement de l'image et des dimensions
         new_image, self.image_posx, self.image_posy = self.get_image(
@@ -1430,7 +1485,7 @@ class Main:
     def get_directory_events(self):
         key_function: dict = {
             pygame.K_ESCAPE: (self.stop_running,),
-            pygame.K_F5: (self.load_ecran, 1),
+            pygame.K_F5: (self.reload_database,),
             pygame.K_UP: (self.first_directory,),
             pygame.K_HOME: (self.first_directory,),
             pygame.K_DOWN: (self.last_directory, ),
@@ -1521,6 +1576,10 @@ class Main:
             if self.nom_surface:
                 self.footer.blit(self.nom_surface, (10, 4))        
                 self.footer.blit(self.compteur_surf, self.compteur_position)
+
+            if self.size_surface:
+                self.footer.blit(self.size_surface, self.size_position)
+                
             self.screen.blit(self.footer, self.footer_position)
         
         self.cmds.draw()
@@ -1541,9 +1600,10 @@ if __name__ == "__main__":
     main = Main()
     try:
         main.run()
-        main.close()
 
     except Exception as erreur:
         print(erreur)
-        main.close()
         raise
+
+    finally:
+        main.close()

@@ -25,8 +25,7 @@ GEN_URL: Generator
 # 
 last_directory: str = ""
 urls = """
-https://e-hentai.org/s/dfa571b894/4035523-1
-https://e-hentai.org/s/cd561f7ba0/4035526-1
+https://e-hentai.org/s/1ecacf8ad1/4040731-1
 
 """
 
