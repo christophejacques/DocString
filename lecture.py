@@ -7,6 +7,7 @@ from typing import Optional, Tuple, Callable
 from collections import namedtuple
 from threading import Thread
 from os import chdir
+from time import perf_counter
 
 
 def fprint(*args, **kwargs):
@@ -22,11 +23,11 @@ class Variable:
     # DIRECTORY: str = r"E:\Jeux\World of Warcraft\_retail_\Screenshots"
     # SUB_DIRECTORY: str = "."
 
-    # DIRECTORY: str = r""
-    # SUB_DIRECTORY: str = "img"
+    DIRECTORY: str = r""
+    SUB_DIRECTORY: str = "img"
 
-    DIRECTORY: str = r"pornpics"
-    SUB_DIRECTORY: str = ""
+    # DIRECTORY: str = r"pornpics"
+    # SUB_DIRECTORY: str = ""
 
     # DIRECTORY: str = r"F:\Images"
     # SUB_DIRECTORY: str = "."
@@ -332,12 +333,12 @@ class MySQL:
 
     def insert(self, table: str, datas: dict):
 
-        liste_valeurs = datas.keys()
+        liste_cles = datas.keys()
         
         sql = f"INSERT INTO {table} "
-        sql += f" ({','.join(liste_valeurs)}) "
+        sql += f" ({','.join(liste_cles)}) "
         sql += "VALUES ("
-        sql += ','.join(map(lambda champ: f":{champ}", liste_valeurs))
+        sql += ','.join(map(lambda champ: f":{champ}", liste_cles))
         sql += ")"
 
         result = self.cu.execute(sql, datas)
@@ -373,7 +374,7 @@ class MySQL:
 
         return rows
 
-    def select_img(self, ident=None, nom=None) -> Optional[Tuple]:
+    def select_img(self, ident: int) -> Optional[Tuple]:
         # 2. Récupération des informations de l'image
         if "memory" in Variable.DATABASE_NAME:
             myBd = sqlite3.connect("file:mabase?mode=memory&cache=shared", 
@@ -384,20 +385,12 @@ class MySQL:
         myBd.row_factory = Factory.namedtuple
         myCursor = myBd.cursor()
         
-        if ident is not None:
-            myCursor.execute("""
-                SELECT rep.emplacementid, emplacement, nom
-                FROM pictures pic
-                INNER JOIN repertoires rep ON pic.emplacementid = rep.emplacementid
-                WHERE ident = :ident""", 
-                {"ident": ident})
-
-        elif nom is not None:
-            myCursor.execute("""
-                SELECT emplacement, nom
-                FROM pictures 
-                WHERE nom like :nom""", 
-                {"nom": f"{nom}%"})
+        myCursor.execute("""
+            SELECT rep.emplacementid, emplacement, nom
+            FROM pictures pic
+            INNER JOIN repertoires rep ON pic.emplacementid = rep.emplacementid
+            WHERE ident = :ident""", 
+            {"ident": ident})
 
         row = myCursor.fetchone()
         emplacement = row.emplacement
@@ -898,6 +891,7 @@ class Main:
         DEBUG = False
         
         if DEBUG:        
+            debut = perf_counter()
             fprint("save:")
 
         if ecran in (1, 2):
@@ -923,6 +917,10 @@ class Main:
             self.msl.update("config", 
                 update_data={"valeur": self.offset},
                 where_data={"cle": "offset"})
+
+        if DEBUG:        
+            fin = perf_counter()
+            fprint(f"save config: {fin - debut:.2f}")
 
     def init_datas(self, emplacementid: int = 0):
         if self.ecran == 1:
@@ -1049,11 +1047,11 @@ class Main:
         self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
         self.save_config(offset=True)
 
-    def previous_directory(self):
+    def previous_directory(self, nombre: int = 1):
         if self.offset == 0:
             return
 
-        self.offset -= self.limit
+        self.offset -= self.limit * nombre
         if self.offset < 0:
             self.offset = 0
 
@@ -1070,21 +1068,26 @@ class Main:
         self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
         self.save_config(offset=True)
 
-    def next_directory(self):
+    def next_directory(self, nombre: int = 1):
         if self.offset + self.limit >= self.nb_collections:
             return 
 
-        self.offset += self.limit
+        if self.offset + nombre * self.limit >= self.nb_collections:
+            self.offset = self.offset_max
+
+        else:
+            self.offset += self.limit * nombre
+
         gauche = self.cmds.get("Gauche")
         if gauche.hidden and self.offset > 0:
             gauche.set_visible(True)
 
         self.load_directories()
-
         self.cmds.get("Droite").set_visible(self.offset < self.offset_max)
 
         # simulation du mouvement de la souris
         self.cmds.mouse_move((self.mouse_pos_x, self.mouse_pos_y))
+
         self.save_config(offset=True)
 
     def last_directory(self):
@@ -1184,7 +1187,7 @@ class Main:
 
     def update_database(self):
         if self.updating is None:
-            self.cmds.get("Refresh").set_exec_color((200, 0, 0))
+            self.cmds.get("Refresh").set_exec_color((200, 200, 0))
             self.updating = Thread(target=self.msl.add_file)
             self.updating.start()
 
@@ -1492,6 +1495,8 @@ class Main:
             pygame.K_END: (self.last_directory,),
             pygame.K_LEFT: (self.previous_directory,),
             pygame.K_RIGHT: (self.next_directory,),
+            pygame.K_PAGEUP: (self.previous_directory, 10),
+            pygame.K_PAGEDOWN: (self.next_directory, 10),
         }
 
         type_event: dict = {
@@ -1574,7 +1579,7 @@ class Main:
 
             self.footer.fill((10, 10, 10, 128))
             if self.nom_surface:
-                self.footer.blit(self.nom_surface, (10, 4))        
+                self.footer.blit(self.nom_surface, (10, 4))
                 self.footer.blit(self.compteur_surf, self.compteur_position)
 
             if self.size_surface:

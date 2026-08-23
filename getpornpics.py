@@ -4,6 +4,7 @@ import traceback
 import winsound
 import ctypes
 import requests
+import webbrowser
 
 from ctypes import wintypes
 from selectolax.parser import HTMLParser, Node
@@ -13,19 +14,13 @@ from pathlib import Path
 from typing import Optional, Generator
 from threading import Thread
 
-# logger.trace
-# logger.debug
-# logger.info
-# logger.success
-# logger.warning
-# logger.error
-# logger.critical
 
+PORNSTAR: str = "Tifa"
+WEBSITE = """
+https://www.pornpics.com/pornstars/
+"""
 
-PORNSTAR: str = "Elsa Jean"
-Site = """
-https://www.pornpics.com/pornstars/lana-rhoades/
-
+QUITTER: str = """
 Copier/Coller la ligne ci-dessous pour arrêter
 QUIT
 """
@@ -62,13 +57,12 @@ class PressPapier:
         print("Attente de sélection d'une page html pour:", PORNSTAR, flush=True)
         self.thread = Thread(target=self.check)
         self.thread.start()
-        sleep(1)
 
     def beep(self, freq, duree=500):
         # winsound.Beep(frequence, duree)
         winsound.Beep(freq, duree)
 
-    def get_clipboard_windows(self):
+    def get_clipboard_windows(self) -> str:
         text = ""
         # 1. Ouvrir le presse-papiers
         if self.OpenClipboard(None):
@@ -79,7 +73,7 @@ class PressPapier:
                     # 3. Verrouiller la mémoire pour pouvoir lire les données
                     data_ptr = self.GlobalLock(h_clip_mem)
                     if data_ptr:
-                        text = ctypes.c_wchar_p(data_ptr).value
+                        text = str(ctypes.c_wchar_p(data_ptr).value)
                         self.GlobalUnlock(h_clip_mem)
             finally:
                 # 4. Toujours refermer le presse-papiers
@@ -167,6 +161,17 @@ class Main:
 
     def __init__(self):
 
+        # Ouvrir la page dans Firefox
+        webbrowser.open_new_tab(WEBSITE.strip())
+
+        # logger.trace
+        # logger.debug
+        # logger.info
+        # logger.success
+        # logger.warning
+        # logger.error
+        # logger.critical
+
         # vide le fichier de log
         with open("books.log", "a"):  # w: overwrite, a: append
             pass
@@ -213,8 +218,8 @@ class Main:
         pp.close()
 
         msg = "Téléchargement total: "
-        msg += f"{self.total_dirs} répertoires, "
-        msg += f"{self.total_files} images"
+        msg += f"{self.total_dirs} répertoire" + ("s" if self.total_dirs > 1 else "")
+        msg += f", {self.total_files} image" + ("s" if self.total_files > 1 else "")
         logger.success(msg)
 
     def title2directory(self, title: str) -> str:
@@ -234,7 +239,7 @@ class Main:
         try:
             response = self.session.get(url)
             response.raise_for_status()
-            
+
         except Exception as erreur:
             logger.critical("ERREUR:", erreur)
             raise
@@ -275,7 +280,7 @@ class Main:
                     response.raise_for_status()
 
                 except Exception as erreur:
-                    logger.error(f"Erreur: {erreur}")
+                    logger.critical(f"Erreur: {erreur}")
 
                     # return Error = True
                     return True
@@ -283,7 +288,7 @@ class Main:
                 tree = HTMLParser(response.text)
                 titlecss = tree.css_first(".title-section > h1:nth-child(1)")
                 if titlecss is None:
-                    logger.error("Erreur de récupération du Titre")
+                    logger.critical("Erreur de récupération du Titre")
                     retry = 0
                     continue
 
@@ -298,7 +303,7 @@ class Main:
 
                 resultat = tree.css_first("#tiles")
                 if resultat is None:
-                    logger.error("Erreur de récupération de #tiles")
+                    logger.critical("Erreur de récupération de #tiles")
                     retry = 0
                     continue
 
@@ -311,6 +316,7 @@ class Main:
                     if (directory / nom_fichier).exists():
                         logger.info(f"le fichier: {nom_fichier} existe déjà")
                         file_already_downloaded = True
+                        
                     else:
                         try:
                             self.download(directory, nom_fichier, url)

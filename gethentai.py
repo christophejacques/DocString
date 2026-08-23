@@ -25,7 +25,7 @@ GEN_URL: Generator
 # 
 last_directory: str = ""
 urls = """
-https://e-hentai.org/s/1ecacf8ad1/4040731-1
+https://e-hentai.org/s/d4c9108c09/4116420-1
 
 """
 
@@ -71,18 +71,6 @@ else:
 MAX_TEL: int = 2000
 
 
-def get_referer(url: str) -> str:
-    *liste_referer, nombre = url.split("-")
-    referer = "-".join(liste_referer)
-    if nombre.isdigit():
-        if nombre == "1":
-            referer += "-" + str(int(nombre)+1)
-        else:
-            referer += "-" + str(int(nombre)-1)
-
-    return referer
-
-
 # vide le fichier de log
 with open("books.log", "a"):  # w: overwrite, a: append
     pass
@@ -123,7 +111,8 @@ def title2directory(title: str) -> str:
     return title.replace("|", "-").replace(":", "-").replace("  ", " ").strip().title()
 
 
-def download(session: requests.Session, directory: str, nom_fichier: str, url: Optional[str]):
+def download(session: requests.Session, 
+        directory: str, nom_fichier: str, url: Optional[str]):
 
     if url is None:
         return
@@ -172,7 +161,6 @@ def main() -> Optional[bool]:
         else:
             url = next_url
 
-        # HEADER.update({"Referer": get_referer(url)})
         retry = 3
         while retry > 0:
             try:
